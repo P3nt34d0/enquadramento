@@ -675,7 +675,7 @@ with c5: st.metric("DC/PL (%)", value=(f"{dcpl_pct:,.2f}%" if dcpl_pct is not No
 st.subheader("3) Orçamento de Aquisição (mês a mês)")
 meses = pd.date_range(dt_ref.replace(day=1), periods=12, freq="MS").date
 orc_default = pd.DataFrame({"Mes": meses, "Aquisicoes": 0.0})
-orc_df = st.data_editor(orc_default, num_rows="dynamic", use_container_width=True)
+orc_df = st.data_editor(orc_default, num_rows="dynamic", width='stretch')
 
 if orc_df is not None and not orc_df.empty:
     orc_df = orc_df.copy()
@@ -806,7 +806,7 @@ if st.button("Rodar projeção", type="primary"):
         if c in out_bd.columns:
             out_bd[c] = out_bd[c].map(lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
     out_bd["DC/PL"] = out_bd["DC/PL"].map(lambda x: f"{x:.2%}".replace(".", ","))
-    st.dataframe(out_bd, use_container_width=True)
+    st.dataframe(out_bd, width='stretch')
 
     # ===== Exportar XLSX com gráficos embutidos =====
     output = BytesIO()
