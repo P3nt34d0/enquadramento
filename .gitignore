@@ -1,0 +1,48 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# =========================
+# Ambientes virtuais
+# =========================
+.venv/
+venv/
+ENV/
+env/
+*.env
+
+# =========================
+# IDEs e editores
+# =========================
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# =========================
+# Arquivos temporários
+# =========================
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.bak
+
+# =========================
+# Arquivos grandes / locais
+# =========================
+*.xls
+*.csv
+*.parquet
+*.pkl
+*.db
+*.sqlite
+*.h5
+
+# =========================
+# PDFs e relatórios gerados
+# =========================
+*.pdf
