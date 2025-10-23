@@ -2,6 +2,7 @@
 maxUploadSize = 1024
 maxMessageSize = 1024
 enableWebsocketCompression = false
+cookieExpirationDelay = 86400
 
 [client]
 showErrorDetails = true
