@@ -855,7 +855,7 @@ if st.button("Rodar projeção", type="primary"):
     st.download_button(
         "Baixar projeção (XLSX)",
         data=output.getvalue(),
-        file_name="projecao_desenquadramento.xlsx",
+        file_name=f"projecao_desenquadramento-{fundo}-{zip_base_date}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="secondary",
         help="Inclui abas de dados e as imagens dos gráficos"
