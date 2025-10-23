@@ -13,6 +13,13 @@ import streamlit as st
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import matplotlib.ticker as mtick
+import hashlib
+import tempfile
+from pathlib import Path
+
+@st.cache_data(show_spinner=False)
+def _file_hash(file_bytes: bytes) -> str:
+    return hashlib.md5(file_bytes).hexdigest()
 
 st.set_page_config(page_title="Projeção - FIDC", layout="wide")
 st.title("Simulação de Projeção de Caixa/DC - FIDC's")
@@ -317,116 +324,128 @@ def _norm_col(name: str) -> str:
 
 # ==== Função de leitura do ZIP SEMPRE com Polars (agora com TAB) ====
 
-def read_estoque_from_zip(zip_file) -> pd.DataFrame:
+@st.cache_data(show_spinner=True)
+def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
     """
-    Lê o primeiro CSV do ZIP com **Polars**, detectando separador (TAB/;/,/|),
-    datas no padrão do arquivo (inclui DD/MM/AAAA) e números pt-BR.
-    Retorna DataFrame pandas com: Data (date), Valor (float).
+    Lê o primeiro CSV do ZIP em modo streaming (polars.scan_csv),
+    retorna (DataFrame pandas com colunas Data/Valor agrupadas por data, zip_base_date).
     """
     if zip_file is None:
-        return pd.DataFrame(columns=["Data", "Valor"])
+        return pd.DataFrame(columns=["Data", "Valor"]), None
 
+    # Lê pequenos bytes só para detectar o separador e tirar hash (cache)
     zf = zipfile.ZipFile(zip_file)
     csv_names = [n for n in zf.namelist() if n.lower().endswith(".csv")]
     if not csv_names:
         st.error("ZIP não contém CSV.")
-        return pd.DataFrame(columns=["Data", "Valor"])
+        return pd.DataFrame(columns=["Data", "Valor"]), None
 
-    with zf.open(csv_names[0]) as f:
-        raw = f.read()
+    inner = csv_names[0]
+    with zf.open(inner) as f:
+        head_bytes = f.read(8192)
+    sep = _detect_sep(head_bytes)
 
-    sep = _detect_sep(raw[:8192])  # detecta TAB, ;, , ou |
-    try:
-        tbl = pl.read_csv(
-            io.BytesIO(raw),
-            has_header=True,
-            separator=sep,
-            infer_schema_length=0,       # lê todo o arquivo
-            ignore_errors=False,         # não silencia erros
-            try_parse_dates=False,
-            quote_char='"',
-            encoding="utf8-lossy",
-        )
-        st.caption(f"✅ Lidas {tbl.height:,} linhas do estoque (sep='{sep}').")
-    except Exception as e:
-        st.error(f"Erro ao ler CSV dentro do ZIP: {e}")
-        return pd.DataFrame(columns=["Data", "Valor"])
+    # Extrai o CSV para um arquivo temporário (evita manter tudo em RAM)
+    with zf.open(inner) as f_in, tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
+        # stream copy
+        while True:
+            chunk = f_in.read(1024 * 1024)
+            if not chunk:
+                break
+            tmp.write(chunk)
+        tmp_path = Path(tmp.name)
 
-    if tbl.height == 0 or len(tbl.columns) == 0:
-        return pd.DataFrame(columns=["Data", "Valor"])
+    # Passo 1: ler somente o cabeçalho para mapear nomes
+    # (pl.read_csv lê apenas algumas linhas; barato)
+    head_tbl = pl.read_csv(
+        tmp_path,
+        has_header=True,
+        separator=sep,
+        n_rows=100,                 # suficiente para header + amostra
+        infer_schema_length=100,
+        try_parse_dates=False,
+        encoding="utf8-lossy",
+    )
+    name_map = {_norm_col(c): c for c in head_tbl.columns}
 
-    # map de nomes normalizados -> nome real
-    name_map = {_norm_col(c): c for c in tbl.columns}
-
-    # no seu arquivo, o nome vem como "DATA_VENCIMENTO_AJUSTADA"
     wanted_date = ["DATA_VENCIMENTO_AJUSTADA", "DTA_VENCIMENTO", "DATA_VENCIMENTO"]
     wanted_val  = ["VALOR_NOMINAL", "VALOR_PRESENTE", "VALOR_AQUISICAO", "VALOR"]
 
-    # procura por match direto ou prefixo
     date_col = next((name_map[k] for k in name_map if any(k.startswith(_norm_col(w)) for w in wanted_date)), None)
     if not date_col:
         st.error("Coluna de Data ('DATA_VENCIMENTO_AJUSTADA'/'DTA_VENCIMENTO'/'DATA_VENCIMENTO') não encontrada.")
-        return pd.DataFrame(columns=["Data", "Valor"])
+        tmp_path.unlink(missing_ok=True)
+        return pd.DataFrame(columns=["Data", "Valor"]), None
 
     val_col = next((name_map[k] for k in name_map if any(_norm_col(w) in k for w in wanted_val)), None)
     if not val_col:
         # fallback: última coluna
-        val_col = tbl.columns[-1]
+        val_col = head_tbl.columns[-1]
 
-    # strip seguro (versões diferentes do Polars)
-    def _strip(expr):
-        try:
-            return expr.str.strip_chars()
-        except Exception:
-            return expr.str.strip()
-
-    # Seleção e conversões
-    sel = tbl.select([
-        _strip(pl.col(date_col).cast(pl.Utf8)).alias("Data_raw"),
-        _strip(pl.col(val_col).cast(pl.Utf8)).alias("Valor_raw"),
-    ])
-
-    converted = sel.with_columns([
-        _pl_any_date(pl.col("Data_raw")).alias("Data"),
-        _pl_normalize_money(pl.col("Valor_raw")).alias("Valor"),
-    ])
-
-    total = converted.height
-    cleaned = converted.drop_nulls(["Data", "Valor"])
-    dropped = total - cleaned.height
-    if dropped > 0:
-        st.caption(f"ℹ️ Agenda: {dropped:,} linhas descartadas (Data/Valor inválidos) de {total:,}.")
-
-    out = (
-        cleaned.group_by("Data").agg(pl.col("Valor").sum())
-               .sort("Data")
-               .to_pandas()
+    # Passo 2: streaming com scan_csv selecionando somente as colunas de interesse
+    lf = (
+        pl.scan_csv(
+            tmp_path,
+            has_header=True,
+            separator=sep,
+            infer_schema_length=1000,   # evita full-file scan
+            try_parse_dates=False,
+            quote_char='"',
+            encoding="utf8-lossy",
+            low_memory=True
+        )
+        .select([
+            pl.col(date_col).cast(pl.Utf8).alias("Data_raw"),
+            pl.col(val_col).cast(pl.Utf8).alias("Valor_raw"),
+        ])
+        .with_columns([
+            _pl_any_date(pl.col("Data_raw")).alias("Data"),
+            _pl_normalize_money(pl.col("Valor_raw")).alias("Valor"),
+        ])
+        .drop_nulls(["Data", "Valor"])
+        .group_by("Data")
+        .agg(pl.col("Valor").sum())
+        .sort("Data")
     )
+
+    tbl = lf.collect(streaming=True)  # <- streaming: baixo uso de RAM
+    out = tbl.to_pandas()
     out["Data"] = pd.to_datetime(out["Data"]).dt.date
-    total_sum = out["Valor"].sum()
-    st.caption(f"📊 Soma total do estoque: R$ {total_sum:,.2f}")
-    # tenta extrair a data-base do CSV (coluna DATA_REFERENCIA)
+
+    st.caption(f"✅ Lidas {len(out):,} datas do estoque (streaming, sep='{sep}').")
+    st.caption(f"📊 Soma total do estoque: R$ {out['Valor'].sum():,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+
+    # Data de referência do ZIP (se existir no CSV)
     zip_base_date = None
     try:
-        # relê só o header para achar a coluna
-        # (se você já tem 'tbl' em escopo, use 'tbl' diretamente em vez de reler bytes)
-        # aqui reaproveitamos 'tbl' lido acima:
-        name_map = {_norm_col(c): c for c in tbl.columns}
         ref_col = next((name_map[k] for k in name_map if "DATA_REFERENCIA" in k), None)
         if ref_col:
-            # pega a data mais frequente na coluna
-            ref_series = (
-                tbl.select(_pl_any_date(pl.col(ref_col).cast(pl.Utf8)).alias("ref"))
+            # pequeno scan só dessa coluna (streaming):
+            lf_ref = (
+                pl.scan_csv(
+                    tmp_path,
+                    has_header=True,
+                    separator=sep,
+                    infer_schema_length=200,
+                    try_parse_dates=False,
+                    encoding="utf8-lossy",
+                    low_memory=True
+                )
+                .select(_pl_any_date(pl.col(ref_col).cast(pl.Utf8)).alias("ref"))
                 .drop_nulls()
-                .to_pandas()["ref"]
             )
-            if len(ref_series) > 0:
-                # usa a moda; se empatar, pega a primeira
-                ref_counts = ref_series.value_counts()
-                zip_base_date = pd.to_datetime(ref_counts.index[0]).date()
+            # pega a primeira (ou moda, se quiser complicar)
+            ref_first = lf_ref.head(1).collect(streaming=True).to_pandas()
+            if not ref_first.empty and pd.notna(ref_first.iloc[0, 0]):
+                zip_base_date = pd.to_datetime(ref_first.iloc[0, 0]).date()
     except Exception:
         pass
+    finally:
+        # remove o temporário
+        tmp_path.unlink(missing_ok=True)
+
     return out, zip_base_date
+
 
 # =========================
 # XML ANBIMA v4 (parse robusto)
@@ -460,6 +479,7 @@ def _num_locale(s):
             v = 0.0
     return -v if neg else v
 
+@st.cache_data(show_spinner=False)
 def parse_anbima_xml_v4(file):
     """
     Extrai:
@@ -675,7 +695,7 @@ with c5: st.metric("DC/PL (%)", value=(f"{dcpl_pct:,.2f}%" if dcpl_pct is not No
 st.subheader("3) Orçamento de Aquisição (mês a mês)")
 meses = pd.date_range(dt_ref.replace(day=1), periods=12, freq="MS").date
 orc_default = pd.DataFrame({"Mes": meses, "Aquisicoes": 0.0})
-orc_df = st.data_editor(orc_default, num_rows="dynamic", width='stretch')
+orc_df = st.data_editor(orc_default, num_rows="dynamic", use_container_width=True)
 
 if orc_df is not None and not orc_df.empty:
     orc_df = orc_df.copy()
@@ -806,7 +826,7 @@ if st.button("Rodar projeção", type="primary"):
         if c in out_bd.columns:
             out_bd[c] = out_bd[c].map(lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
     out_bd["DC/PL"] = out_bd["DC/PL"].map(lambda x: f"{x:.2%}".replace(".", ","))
-    st.dataframe(out_bd, width='stretch')
+    st.dataframe(out_bd, use_container_width=True)
 
     # ===== Exportar XLSX com gráficos embutidos =====
     output = BytesIO()

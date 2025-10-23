@@ -1,0 +1,7 @@
+[server]
+maxUploadSize = 1024
+maxMessageSize = 1024
+enableWebsocketCompression = false
+
+[client]
+showErrorDetails = true
