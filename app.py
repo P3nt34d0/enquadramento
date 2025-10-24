@@ -231,46 +231,32 @@ def business_days_in_month(mes_inicio: dt.date) -> list[dt.date]:
     dias = [d.date() for d in dias if is_business_day_calendar(d.date())]
     return dias
 
-# =========================
-# Helpers Polars (datas e números robustos)
-# =========================
-def _pl_to_date(expr, fmt: str = "%Y-%m-%d"):
-    """Compatível com versões diferentes do Polars."""
-    try:
-        return expr.str.to_date(format=fmt, strict=False)
-    except Exception:
-        return expr.str.strptime(pl.Date, format=fmt, strict=False)
-
-def _pl_to_date(expr, fmt: str = "%Y-%m-%d"):
-    """Compatível com versões diferentes do Polars."""
-    try:
-        return expr.str.to_date(format=fmt, strict=False)
-    except Exception:
-        return expr.str.strptime(pl.Date, format=fmt, strict=False)
-
-def build_liq_bucket_df(agenda_df: pd.DataFrame, base_date: dt.date) -> pd.DataFrame:
+def build_liq_bucket_df(agenda_df: pd.DataFrame, base_date: dt.date | None) -> pd.DataFrame:
     """
-    Pega o estoque importado (agenda_df: Data, Valor) e agrupa o fluxo de liquidação
-    em janelas de dias desde a base_date (zip_base_date).
-
-    Buckets:
-      0-15
-      16-30
-      31-45
-      ...
-      166-180
-      181+
-    Retorna um DataFrame com colunas:
-      ['Faixa', 'ValorTotal']
+    Monta buckets de prazo (0-15,16-30,...,181+) com base no estoque.
+    base_date = data-base (ex.: DATA_REFERENCIA do ZIP).
+    Se base_date vier None, usamos a menor data de 'Data' como referência.
     """
-    if agenda_df is None or agenda_df.empty or base_date is None:
+
+    if agenda_df is None or agenda_df.empty:
         return pd.DataFrame(columns=["Faixa", "ValorTotal"])
 
     df = agenda_df.copy()
     df["Data"] = pd.to_datetime(df["Data"]).dt.date
+
+    # fallback se não tiver base_date
+    if base_date is None:
+        base_date = min(df["Data"])  # menor data de liquidação vira D0
+
+    # dias até liquidar = diferença em dias corridos
     df["dias_para_liquidar"] = df["Data"].apply(lambda d: (d - base_date).days)
 
-    # definimos os limites das faixas
+    # mantemos apenas linhas com dias_para_liquidar >= 0
+    df = df[df["dias_para_liquidar"] >= 0].copy()
+    if df.empty:
+        return pd.DataFrame(columns=["Faixa", "ValorTotal"])
+
+    # buckets
     bins = [
         (0, 15),
         (16, 30),
@@ -292,14 +278,14 @@ def build_liq_bucket_df(agenda_df: pd.DataFrame, base_date: dt.date) -> pd.DataF
 
     for (lo, hi) in bins:
         if hi is None:
-            label = f"{lo}+"          # "181+"
+            faixa_label = f"{lo}+"
             mask = df["dias_para_liquidar"] >= lo
         else:
-            label = f"{lo}-{hi}"      # "0-15", "16-30", ...
+            faixa_label = f"{lo}-{hi}"
             mask = (df["dias_para_liquidar"] >= lo) & (df["dias_para_liquidar"] <= hi)
 
         soma_bucket = df.loc[mask, "Valor"].sum()
-        labels.append(label)
+        labels.append(faixa_label)
         valores.append(soma_bucket)
 
     bucket_df = pd.DataFrame({"Faixa": labels, "ValorTotal": valores})
@@ -926,6 +912,9 @@ if st.button("Rodar projeção", type="primary"):
     with col_g3:
         st.markdown("**Distribuição de Liquidações por Faixa de Prazo (Estoque da Data Importada)**")
 
+        st.caption(f"Debug base_date ZIP: {zip_base_date}")
+        st.caption(f"Linhas agenda_df: {0 if agenda_df is None else len(agenda_df)}")
+        
         liq_bucket_df = build_liq_bucket_df(agenda_df, zip_base_date)
 
         if liq_bucket_df.empty:
@@ -1023,8 +1012,8 @@ if st.button("Rodar projeção", type="primary"):
         ws.insert_image("A3",  "dcpl.png", {"image_data": img_dcpl, "x_scale": 1.0, "y_scale": 1.0})
         ws.write("A27", "PL, DC e Soberano (diário)",        title_fmt)
         ws.insert_image("A29", "pldc.png", {"image_data": img_pldc, "x_scale": 1.0, "y_scale": 1.0})
-        ws.write("A53", "Distribuição de Liquidações por Faixa de Prazo (Estoque da Data Importada)",        title_fmt)
-        #ws.insert_image("A55", "faixa.png", {"image_data": img_faixa, "x_scale": 1.0, "y_scale": 1.0})
+        ws.write("A53", "Liquidações Futuras por Faixa de Prazo", title_fmt)
+        ws.insert_image("A55", "faixas.png", {"image_data": img_faixa})
 
         ws_proj = writer.sheets["Projecao"]
         ws_proj.freeze_panes(1, 1)
