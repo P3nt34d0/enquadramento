@@ -911,7 +911,7 @@ if st.button("Rodar projeção", type="primary"):
 
     # ----- 3) Gráfico de barras: liquidação prevista por faixa de prazo -----
     with col_g3:
-        st.markdown("**Distribuição de Liquidações por Faixa de Prazo (Estoque da Data Importada)**")
+        st.markdown("**Distribuição de Liquidações por Faixa de Prazo (Em estoque)**")
 
         liq_bucket_df = build_liq_bucket_df(agenda_df, dt_ref)
 
@@ -942,13 +942,15 @@ if st.button("Rodar projeção", type="primary"):
             ax3.bar(x_pos, liq_bucket_df["ValorTotal"], width=0.6)
 
             ax3.set_xticks(list(x_pos))
-            ax3.set_xticklabels(liq_bucket_df["Faixa"], rotation=0)
+            ax3.set_xticklabels(liq_bucket_df["Faixa"], rotation=90, ha="center", va="top")
+
+            ax3.tick_params(axis="x", which="major", labelsize=8)
+            ax3.tick_params(axis="y", which="major", labelsize=9)
 
             ax3.yaxis.set_major_formatter(mtick.FuncFormatter(_fmt_brl))
 
             ax3.set_xlabel("Faixa de Dias até a Liquidação")
             ax3.set_ylabel("Valor a Liquidar (R$)")
-            ax3.set_title("Liquidações Futuras do Estoque por Bucket de Prazo")
 
             ax3.grid(axis="y", alpha=0.25)
 
