@@ -1021,10 +1021,15 @@ if st.button("Rodar projeção", type="primary"):
         ws_proj.set_column(1, 10, 16)
 
     output.seek(0)
+
+    fundo_nome_sanitizado = fundo.replace(" ", "_")
+    data_ref_str = dt_ref.strftime("%Y-%m-%d") if dt_ref else "sem_data"
+    nome_arquivo_xlsx = f"Projecao_{fundo_nome_sanitizado}_{data_ref_str}.xlsx"
+
     st.download_button(
-        "Baixar projeção (XLSX)",
+        "📥 Baixar projeção (xlsx)",
         data=output.getvalue(),
-        file_name=f"projecao_desenquadramento-{fundo}-{zip_base_date}.xlsx",
+        file_name=nome_arquivo_xlsx,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="secondary",
         help="Inclui abas de dados e as imagens dos gráficos"
