@@ -248,78 +248,62 @@ def _pl_to_date(expr, fmt: str = "%Y-%m-%d"):
     except Exception:
         return expr.str.strptime(pl.Date, format=fmt, strict=False)
 
-def _pl_any_date(expr_utf8):
+def build_liq_bucket_df(agenda_df: pd.DataFrame, base_date: dt.date) -> pd.DataFrame:
     """
-    Converte string -> Date tentando formatos comuns:
-    - YYYY-MM-DD (corta 10)
-    - DD/MM/YYYY
-    - YYYYMMDD
-    - ISO genérico
+    Pega o estoque importado (agenda_df: Data, Valor) e agrupa o fluxo de liquidação
+    em janelas de dias desde a base_date (zip_base_date).
+
+    Buckets:
+      0-15
+      16-30
+      31-45
+      ...
+      166-180
+      181+
+    Retorna um DataFrame com colunas:
+      ['Faixa', 'ValorTotal']
     """
-    e = expr_utf8
-    d1 = _pl_to_date(e.str.slice(0, 10), fmt="%Y-%m-%d")
-    d2 = _pl_to_date(e, fmt="%d/%m/%Y")
-    try:
-        d3 = e.str.strptime(pl.Date, format="%Y%m%d", strict=False)
-    except Exception:
-        d3 = None
-    try:
-        d4 = e.str.to_datetime(strict=False).dt.date()
-    except Exception:
-        d4 = None
+    if agenda_df is None or agenda_df.empty or base_date is None:
+        return pd.DataFrame(columns=["Faixa", "ValorTotal"])
 
-    cands = [d1, d2]
-    if d3 is not None: cands.append(d3)
-    if d4 is not None: cands.append(d4)
-    return pl.coalesce(cands)
+    df = agenda_df.copy()
+    df["Data"] = pd.to_datetime(df["Data"]).dt.date
+    df["dias_para_liquidar"] = df["Data"].apply(lambda d: (d - base_date).days)
 
-def _pl_normalize_money(expr_utf8):
-    """
-    Converte texto monetário para número:
-    - '1.234,56'  -> 1234.56
-    - '1234,56'   -> 1234.56
-    - '(1.234,56)'-> -1234.56
-    - remove espaços e lida com parênteses para negativo
-    Retorna Expr Float64.
-    """
-    e = expr_utf8.fill_null("").str.replace_all(r"\s+", "")
-    e = e.str.replace_all(r"^\((.*)\)$", r"-\1")  # parênteses negativos
+    # definimos os limites das faixas
+    bins = [
+        (0, 15),
+        (16, 30),
+        (31, 45),
+        (46, 60),
+        (61, 75),
+        (76, 90),
+        (91, 105),
+        (106, 120),
+        (121, 135),
+        (136, 150),
+        (151, 165),
+        (166, 180),
+        (181, None),  # 181+
+    ]
 
-    both = (e.str.contains(",")) & (e.str.contains(r"\."))
-    only_comma = (e.str.contains(",")) & (~e.str.contains(r"\."))
+    labels = []
+    valores = []
 
-    # IMPORTANTe: use pl.when(...).then(...).when(...).then(...).otherwise(...)
-    e1 = (
-        pl.when(both)
-          .then(e.str.replace_all(r"\.", "").str.replace_all(",", "."))
-          .when(only_comma)
-          .then(e.str.replace_all(",", "."))
-          .otherwise(e)
-    )
+    for (lo, hi) in bins:
+        if hi is None:
+            label = f"{lo}+"          # "181+"
+            mask = df["dias_para_liquidar"] >= lo
+        else:
+            label = f"{lo}-{hi}"      # "0-15", "16-30", ...
+            mask = (df["dias_para_liquidar"] >= lo) & (df["dias_para_liquidar"] <= hi)
 
-    return e1.cast(pl.Float64, strict=False)
+        soma_bucket = df.loc[mask, "Valor"].sum()
+        labels.append(label)
+        valores.append(soma_bucket)
 
-def _detect_sep(sample_bytes: bytes) -> str:
-    """Detecta o separador mais provável entre TAB, ';', ',', '|'. """
-    head = sample_bytes.decode(errors="ignore")
-    candidates = {
-        "\t": head.count("\t"),
-        ";":  head.count(";"),
-        ",":  head.count(","),
-        "|":  head.count("|"),
-    }
-    # escolhe o que mais aparece (preferindo TAB em empate)
-    sep = max(candidates, key=lambda k: (candidates[k], 1 if k == "\t" else 0))
-    return sep
-
-def _norm_col(name: str) -> str:
-    return (
-        str(name).replace("\ufeff", "")
-        .strip()
-        .replace("\t", " ")
-        .replace("  ", " ")
-        .upper()
-    )
+    bucket_df = pd.DataFrame({"Faixa": labels, "ValorTotal": valores})
+    return bucket_df
 
 # ==== Função de leitura do ZIP SEMPRE com Polars (agora com TAB) ====
 
@@ -863,8 +847,9 @@ if st.button("Rodar projeção", type="primary"):
     # ===== Gráficos (salvos antes de exibir) =====
     img_dcpl = BytesIO()
     img_pldc = BytesIO()
+    img_faixa = BytesIO()
 
-    col_g1, col_g2 = st.columns(2)
+    col_g1, col_g2, col_g3 = st.columns(3)
 
     # ----- G1: DC/PL -----
     with col_g1:
@@ -937,6 +922,68 @@ if st.button("Rodar projeção", type="primary"):
         st.pyplot(fig2, clear_figure=False)
         plt.close(fig2)
 
+    # ----- 3) Gráfico de barras: liquidação prevista por faixa de prazo -----
+    with col_g3:
+        st.markdown("**Distribuição de Liquidações por Faixa de Prazo (Estoque da Data Importada)**")
+
+    liq_bucket_df = build_liq_bucket_df(agenda_df, zip_base_date)
+
+    if liq_bucket_df.empty:
+        st.info("Não foi possível montar a distribuição por faixas (estoque ou data-base ausentes).")
+    else:
+        # formatação BRL no eixo Y
+        def _fmt_brl(v, pos):
+            absv = abs(v)
+            if absv >= 1e9:
+                txt = f"R$ {v/1e9:,.2f} bi"
+            elif absv >= 1e6:
+                txt = f"R$ {v/1e6:,.2f} mi"
+            elif absv >= 1e3:
+                txt = f"R$ {v/1e3:,.0f} mil"
+            else:
+                txt = f"R$ {v:,.0f}"
+            # troca , . pro padrão brasileiro
+            return (
+                txt.replace(",", "X")
+                   .replace(".", ",")
+                   .replace("X", ".")
+            )
+
+        fig3, ax3 = plt.subplots(figsize=(9,4.5), dpi=140)
+
+        x_pos = range(len(liq_bucket_df))
+        ax3.bar(x_pos, liq_bucket_df["ValorTotal"], width=0.6)
+
+        ax3.set_xticks(list(x_pos))
+        ax3.set_xticklabels(liq_bucket_df["Faixa"], rotation=0)
+
+        ax3.yaxis.set_major_formatter(mtick.FuncFormatter(_fmt_brl))
+
+        ax3.set_xlabel("Faixa de Dias até a Liquidação")
+        ax3.set_ylabel("Valor a Liquidar (R$)")
+        ax3.set_title("Liquidações Futuras do Estoque por Bucket de Prazo")
+
+        ax3.grid(axis="y", alpha=0.25)
+
+        # coloca label em cima de cada barra, em R$ mi/bil etc.
+        for xpos, val in zip(x_pos, liq_bucket_df["ValorTotal"]):
+            if val and val != 0:
+                label_txt = _fmt_brl(val, None)
+                ax3.text(
+                    xpos,
+                    val,
+                    label_txt,
+                    ha="center",
+                    va="bottom",
+                    fontsize=8,
+                    rotation=0,
+                )
+
+        fig3.savefig(img_faixa, format="png", dpi=200, bbox_inches="tight")
+        img_faixa.seek(0)
+        st.pyplot(fig3, clear_figure=True)
+        plt.close(fig3)
+
     # ===== Resultado =====
     st.markdown("### Resultado")
     bullets = []
@@ -976,6 +1023,8 @@ if st.button("Rodar projeção", type="primary"):
         ws.insert_image("A3",  "dcpl.png", {"image_data": img_dcpl, "x_scale": 1.0, "y_scale": 1.0})
         ws.write("A27", "PL, DC e Soberano (diário)",        title_fmt)
         ws.insert_image("A29", "pldc.png", {"image_data": img_pldc, "x_scale": 1.0, "y_scale": 1.0})
+        ws.write("A53", "Distribuição de Liquidações por Faixa de Prazo (Estoque da Data Importada)",        title_fmt)
+        ws.insert_image("A55", "faixa.png", {"image_data": img_faixa, "x_scale": 1.0, "y_scale": 1.0})
 
         ws_proj = writer.sheets["Projecao"]
         ws_proj.freeze_panes(1, 1)
