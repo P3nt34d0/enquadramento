@@ -1024,7 +1024,7 @@ if st.button("Rodar projeção", type="primary"):
         ws.write("A27", "PL, DC e Soberano (diário)",        title_fmt)
         ws.insert_image("A29", "pldc.png", {"image_data": img_pldc, "x_scale": 1.0, "y_scale": 1.0})
         ws.write("A53", "Distribuição de Liquidações por Faixa de Prazo (Estoque da Data Importada)",        title_fmt)
-        ws.insert_image("A55", "faixa.png", {"image_data": img_faixa, "x_scale": 1.0, "y_scale": 1.0})
+        #ws.insert_image("A55", "faixa.png", {"image_data": img_faixa, "x_scale": 1.0, "y_scale": 1.0})
 
         ws_proj = writer.sheets["Projecao"]
         ws_proj.freeze_panes(1, 1)
