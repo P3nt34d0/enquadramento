@@ -913,15 +913,6 @@ if st.button("Rodar projeção", type="primary"):
     with col_g3:
         st.markdown("**Distribuição de Liquidações por Faixa de Prazo (Estoque da Data Importada)**")
 
-        st.write("zip_base_date usado:", zip_base_date)
-        if agenda_df is not None and not agenda_df.empty:
-            debug_tmp = agenda_df.copy()
-            debug_tmp["Data"] = pd.to_datetime(debug_tmp["Data"]).dt.date
-            base_dbg = zip_base_date if zip_base_date is not None else min(debug_tmp["Data"])
-            debug_tmp["dias_para_liquidar"] = debug_tmp["Data"].apply(lambda d: (d - base_dbg).days)
-            debug_preview = debug_tmp[["Data", "Valor", "dias_para_liquidar"]].sort_values("dias_para_liquidar").head(20)
-            st.write("preview diferença dias:", debug_preview)
-
         liq_bucket_df = build_liq_bucket_df(agenda_df, dt_ref)
 
         if liq_bucket_df.empty:
