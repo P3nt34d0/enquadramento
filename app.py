@@ -326,20 +326,23 @@ def _norm_col(name: str) -> str:
 @st.cache_data(show_spinner=True)
 def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
     """
-    Lê o primeiro CSV do ZIP em modo streaming com Polars,
-    fazendo o mínimo possível em RAM.
+    Lê o primeiro CSV do ZIP em modo streaming com Polars, tratando arquivos enormes.
     Retorna:
-      - agenda_df (pandas): colunas [Data (date), Valor (float)], agregada por Data
-      - zip_base_date (date | None): data de referência do estoque (DATA_REFERENCIA)
-    Observações:
-      - força leitura como texto (Utf8) pra evitar erro com colunas enormes tipo CHAVE_NFE
-      - converte Data/Valor manualmente
-      - remove o arquivo temporário no final
+      - agenda_df: pandas DataFrame com colunas [Data (date), Valor (float)], agregada por Data
+      - zip_base_date: date ou None (DATA_REFERENCIA / DATA_FUNDO do CSV)
+    Regras importantes:
+      - Lemos um header rápido (sem forçar dtype)
+      - Descobrimos nomes de colunas
+      - Depois relermos tudo via scan_csv forçando todas as colunas como texto (Utf8)
+        usando schema_overrides dinâmico
     """
     if zip_file is None:
         return pd.DataFrame(columns=["Data", "Valor"]), None
 
-    # Abrir o ZIP e decidir qual CSV ler
+    import tempfile
+    from pathlib import Path
+
+    # Abre o ZIP e pega o primeiro CSV
     zf = zipfile.ZipFile(zip_file)
     csv_names = [n for n in zf.namelist() if n.lower().endswith(".csv")]
     if not csv_names:
@@ -348,11 +351,10 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
 
     inner = csv_names[0]
 
-    # Ler alguns bytes só pra detecção do separador
+    # Lê alguns bytes iniciais para detectar separador
     with zf.open(inner) as f:
         head_bytes = f.read(8192)
 
-    # detecta separador (TAB, ;, , ou |)
     def _detect_sep(sample_bytes: bytes) -> str:
         head = sample_bytes.decode(errors="ignore")
         candidates = {
@@ -361,22 +363,18 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
             ",":  head.count(","),
             "|":  head.count("|"),
         }
-        # pega o que mais aparece; em empate, preferimos TAB
+        # escolhe o mais frequente; em empate, prioriza TAB
         return max(candidates, key=lambda k: (candidates[k], 1 if k == "\t" else 0))
 
     sep = _detect_sep(head_bytes)
 
-    # Copia o CSV pra um arquivo temporário no disco (streamlit cache-friendly)
-    import tempfile
-    from pathlib import Path
+    # Copia o CSV inteiro pra um arquivo temporário
     with zf.open(inner) as f_in, tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
         for chunk in iter(lambda: f_in.read(1024 * 1024), b""):
             tmp.write(chunk)
         tmp_path = Path(tmp.name)
 
-    # ==== Passo 1: ler só algumas linhas como TEXTO pra mapear nomes de coluna ====
-
-    # normalizador de nome de coluna
+    # Helper pra normalizar nome de coluna
     def _norm_col(name: str) -> str:
         return (
             str(name)
@@ -387,19 +385,19 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
             .upper()
         )
 
+    # 1) PRIMEIRA LEITURA RÁPIDA SÓ PRA PEGAR AS COLUNAS (sem dtypes forçado!)
     try:
-        # força todas as colunas como Utf8 pra não ter inferência quebrando
         head_tbl = pl.read_csv(
             tmp_path,
             has_header=True,
             separator=sep,
-            n_rows=200,               # amostra pequena é suficiente
-            infer_schema_length=0,    # não tentar inferir tipos numéricos
+            n_rows=200,
+            infer_schema_length=200,
             try_parse_dates=False,
             encoding="utf8-lossy",
-            dtypes=pl.Utf8,           # <- TUDO string
             ignore_errors=True,
             truncate_ragged_lines=True,
+            low_memory=True,
         )
     except Exception as e:
         tmp_path.unlink(missing_ok=True)
@@ -410,9 +408,9 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
         tmp_path.unlink(missing_ok=True)
         return pd.DataFrame(columns=["Data", "Valor"]), None
 
+    # mapeia nomes normalizados -> nome original
     name_map = {_norm_col(c): c for c in head_tbl.columns}
 
-    # tentamos achar colunas relevantes
     wanted_date = ["DATA_VENCIMENTO_AJUSTADA", "DTA_VENCIMENTO", "DATA_VENCIMENTO"]
     wanted_val  = ["VALOR_PRESENTE", "VALOR_NOMINAL", "VALOR_AQUISICAO", "VALOR"]
     wanted_ref  = ["DATA_REFERENCIA", "DATA_FUNDO", "DT_REF"]
@@ -428,21 +426,24 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
 
     date_col = _pick(wanted_date)
     if not date_col:
-        st.error("Coluna de Data ('DATA_VENCIMENTO_AJUSTADA'/'DTA_VENCIMENTO'/'DATA_VENCIMENTO') não encontrada.")
         tmp_path.unlink(missing_ok=True)
+        st.error("Coluna de Data ('DATA_VENCIMENTO_AJUSTADA'/'DTA_VENCIMENTO'/'DATA_VENCIMENTO') não encontrada.")
         return pd.DataFrame(columns=["Data", "Valor"]), None
 
     val_col = _pick(wanted_val)
     if not val_col:
-        # fallback: se nenhuma coluna clássica bateu, pega a última coluna
+        # fallback: última coluna se não achou valor típico
         val_col = head_tbl.columns[-1]
 
-    ref_col = _pick(wanted_ref)  # pode ser None e tudo bem
+    ref_col = _pick(wanted_ref)  # pode ser None
 
-    # ==== Helpers internos reutilizados ====
+    # Agora que conhecemos TODAS as colunas, criamos schema_overrides
+    # => força TODAS como Utf8 (texto)
+    schema_overrides = {col: pl.Utf8 for col in head_tbl.columns}
+
+    # helpers de limpeza e conversão (iguais aos que usamos antes)
 
     def _strip_expr(e: pl.Expr) -> pl.Expr:
-        # polars mudou strip API entre versões, então tratamos as duas
         try:
             return e.str.strip_chars()
         except Exception:
@@ -455,7 +456,6 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
             return expr.str.strptime(pl.Date, format=fmt, strict=False)
 
     def _pl_any_date(expr_utf8: pl.Expr) -> pl.Expr:
-        # tenta vários formatos comuns
         e = expr_utf8
         d1 = _pl_to_date(e.str.slice(0, 10), fmt="%Y-%m-%d")   # 2025-09-30
         d2 = _pl_to_date(e, fmt="%d/%m/%Y")                    # 30/09/2025
@@ -476,15 +476,14 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
         return pl.coalesce(cands)
 
     def _pl_normalize_money(expr_utf8: pl.Expr) -> pl.Expr:
-        # remove espaços
         e = expr_utf8.fill_null("").str.replace_all(r"\s+", "")
-        # trata parênteses negativos: "(1.234,56)" -> "-1.234,56"
+        # trata números com parênteses negativos
         e = e.str.replace_all(r"^\((.*)\)$", r"-\1")
 
         both = (e.str.contains(",")) & (e.str.contains(r"\."))
         only_comma = (e.str.contains(",")) & (~e.str.contains(r"\."))
 
-        e1 = (
+        cleaned = (
             pl.when(both)
               .then(e.str.replace_all(r"\.", "").str.replace_all(",", "."))
               .when(only_comma)
@@ -492,23 +491,21 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
               .otherwise(e)
         )
 
-        return e1.cast(pl.Float64, strict=False)
+        return cleaned.cast(pl.Float64, strict=False)
 
-    # ==== Passo 2: agora lê o arquivo GRANDE via scan_csv em modo streaming ====
-    # Importantíssimo: não deixar Polars inferir inteiro gigantesco etc.
-    lf = (
+    # 2) LEITURA STREAMING DE FATO (scan_csv), AGORA FORÇANDO UTF8 EM TODAS AS COLUNAS
+    lf_main = (
         pl.scan_csv(
             tmp_path,
             has_header=True,
             separator=sep,
-            infer_schema_length=0,        # não tentar inferir tipo "numérico gigante"
             try_parse_dates=False,
-            quote_char='"',
             encoding="utf8-lossy",
-            low_memory=True,
             ignore_errors=True,
             truncate_ragged_lines=True,
-            dtypes=pl.Utf8,               # força TODAS colunas como texto
+            low_memory=True,
+            infer_schema_length=0,
+            schema_overrides=schema_overrides,  # <- aqui está a mágica
         )
         .select([
             _strip_expr(pl.col(date_col)).alias("Data_raw"),
@@ -530,23 +527,21 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
         .sort("Data")
     )
 
-    tbl = lf.collect(streaming=True)
+    tbl = lf_main.collect(streaming=True)
     agenda_df = tbl.to_pandas()
     agenda_df["Data"] = pd.to_datetime(agenda_df["Data"]).dt.date
 
-    # debug/sanity no app
     st.caption(
         "✅ Agenda carregada: "
-        f"{agenda_df.shape[0]:,} datas únicas; "
-        "separador='{0}'".format(sep)
+        f"{agenda_df.shape[0]:,} datas únicas; separador='{sep}'"
     )
     st.caption(
         "📊 Soma total do estoque: R$ "
         + f"{agenda_df['Valor'].sum():,.2f}"
-            .replace(",", "X").replace(".", ",").replace("X", ".")
+          .replace(",", "X").replace(".", ",").replace("X", ".")
     )
 
-    # ==== Passo 3: obter zip_base_date (data de referência do estoque)
+    # 3) PEGAR A DATA BASE DO ZIP (DATA_REFERENCIA / DATA_FUNDO...):
     zip_base_date = None
     try:
         lf_ref = (
@@ -554,14 +549,13 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
                 tmp_path,
                 has_header=True,
                 separator=sep,
-                infer_schema_length=0,
                 try_parse_dates=False,
-                quote_char='"',
                 encoding="utf8-lossy",
-                low_memory=True,
                 ignore_errors=True,
                 truncate_ragged_lines=True,
-                dtypes=pl.Utf8,
+                low_memory=True,
+                infer_schema_length=0,
+                schema_overrides=schema_overrides,
             )
             .select([
                 _pl_any_date(
@@ -569,15 +563,14 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
                 ).alias("RefDate")
             ])
             .drop_nulls()
+            .head(1)
         )
-        # pega a primeira referência válida
-        ref_first = lf_ref.head(1).collect(streaming=True).to_pandas()
+        ref_first = lf_ref.collect(streaming=True).to_pandas()
         if not ref_first.empty and pd.notna(ref_first.iloc[0, 0]):
             zip_base_date = pd.to_datetime(ref_first.iloc[0, 0]).date()
     except Exception:
         pass
     finally:
-        # apagar arquivo temporário
         try:
             tmp_path.unlink(missing_ok=True)
         except Exception:
