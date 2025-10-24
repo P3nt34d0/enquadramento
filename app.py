@@ -39,7 +39,6 @@ with st.sidebar:
     fundo = st.selectbox(
         "Selecione o Fundo",
         ["FIDC Franquias", "FIDC Clubcard"],
-        help="Define o bucket de liquidação das aquisições"
     )
 
     st.divider()
@@ -831,14 +830,14 @@ if st.button("Rodar projeção", type="primary"):
     # ===== Exportar XLSX com gráficos embutidos =====
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        out_bd.to_excel(writer, sheet_name="Projecao", index=False)
+        out_bd.to_excel(writer, sheet_name="Projeção", index=False)
         if agenda_df is not None and not agenda_df.empty:
-            agenda_df.to_excel(writer, sheet_name="AgendaZIP", index=False)
+            agenda_df.to_excel(writer, sheet_name="Liquidações em Estoque", index=False)
         if orc_df is not None and not orc_df.empty:
-            orc_df.to_excel(writer, sheet_name="Orcamento", index=False)
+            orc_df.to_excel(writer, sheet_name="Orçamento Informado", index=False)
 
         wb = writer.book
-        ws = wb.add_worksheet("Graficos")
+        ws = wb.add_worksheet("Gráficos")
         title_fmt = wb.add_format({"bold": True, "font_size": 14})
 
         ws.write("A1",  "DC/PL ao longo do tempo (diário)", title_fmt)
