@@ -7,5 +7,5 @@ pip install -r requirements.txt
 streamlit run app.py
 
 git add .
-git commit -m ""
+git commit -m "a"
 git push origin main
