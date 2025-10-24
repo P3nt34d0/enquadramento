@@ -231,33 +231,34 @@ def business_days_in_month(mes_inicio: dt.date) -> list[dt.date]:
     dias = [d.date() for d in dias if is_business_day_calendar(d.date())]
     return dias
 
-def build_liq_bucket_df(agenda_df: pd.DataFrame, base_date: dt.date | None) -> pd.DataFrame:
+def build_liq_bucket_df(agenda_df: pd.DataFrame, dia_zero: dt.date | None) -> pd.DataFrame:
     """
-    Monta buckets de prazo (0-15,16-30,...,181+) com base no estoque.
-    base_date = data-base (ex.: DATA_REFERENCIA do ZIP).
-    Se base_date vier None, usamos a menor data de 'Data' como referência.
-    """
+    Monta buckets de prazo (0-15,16-30,...,181+) em R$,
+    olhando o estoque (agenda_df: Data, Valor).
 
+    dia_zero = data que vamos considerar como D0.
+       Normalmente: dt_ref (data-base do XML).
+       Se vier None, cai pro menor Data do estoque.
+    """
     if agenda_df is None or agenda_df.empty:
         return pd.DataFrame(columns=["Faixa", "ValorTotal"])
 
     df = agenda_df.copy()
     df["Data"] = pd.to_datetime(df["Data"]).dt.date
 
-    # fallback se não tiver base_date
-    if base_date is None:
-        base_date = min(df["Data"])  # menor data de liquidação vira D0
+    if dia_zero is None:
+        dia_zero = min(df["Data"])
 
-    # dias até liquidar = diferença em dias corridos
-    df["dias_para_liquidar"] = df["Data"].apply(lambda d: (d - base_date).days)
+    # diferença em dias corridos
+    df["dias_para_liquidar"] = df["Data"].apply(lambda d: (d - dia_zero).days)
 
-    # mantemos apenas linhas com dias_para_liquidar >= 0
+    # só olhamos fluxos futuros ou no D0
     df = df[df["dias_para_liquidar"] >= 0].copy()
     if df.empty:
         return pd.DataFrame(columns=["Faixa", "ValorTotal"])
 
-    # buckets
-    bins = [
+    # buckets fixos de 15 em 15 dias até 181+
+    buckets = [
         (0, 15),
         (16, 30),
         (31, 45),
@@ -273,22 +274,22 @@ def build_liq_bucket_df(agenda_df: pd.DataFrame, base_date: dt.date | None) -> p
         (181, None),  # 181+
     ]
 
-    labels = []
+    faixas = []
     valores = []
 
-    for (lo, hi) in bins:
+    for (lo, hi) in buckets:
         if hi is None:
-            faixa_label = f"{lo}+"
+            label = f"{lo}+"
             mask = df["dias_para_liquidar"] >= lo
         else:
-            faixa_label = f"{lo}-{hi}"
+            label = f"{lo}-{hi}"
             mask = (df["dias_para_liquidar"] >= lo) & (df["dias_para_liquidar"] <= hi)
 
         soma_bucket = df.loc[mask, "Valor"].sum()
-        labels.append(faixa_label)
+        faixas.append(label)
         valores.append(soma_bucket)
 
-    bucket_df = pd.DataFrame({"Faixa": labels, "ValorTotal": valores})
+    bucket_df = pd.DataFrame({"Faixa": faixas, "ValorTotal": valores})
     return bucket_df
 
 # ==== Função de leitura do ZIP SEMPRE com Polars (agora com TAB) ====
@@ -912,10 +913,16 @@ if st.button("Rodar projeção", type="primary"):
     with col_g3:
         st.markdown("**Distribuição de Liquidações por Faixa de Prazo (Estoque da Data Importada)**")
 
-        st.caption(f"Debug base_date ZIP: {zip_base_date}")
-        st.caption(f"Linhas agenda_df: {0 if agenda_df is None else len(agenda_df)}")
-        
-        liq_bucket_df = build_liq_bucket_df(agenda_df, zip_base_date)
+        st.write("zip_base_date usado:", zip_base_date)
+        if agenda_df is not None and not agenda_df.empty:
+            debug_tmp = agenda_df.copy()
+            debug_tmp["Data"] = pd.to_datetime(debug_tmp["Data"]).dt.date
+            base_dbg = zip_base_date if zip_base_date is not None else min(debug_tmp["Data"])
+            debug_tmp["dias_para_liquidar"] = debug_tmp["Data"].apply(lambda d: (d - base_dbg).days)
+            debug_preview = debug_tmp[["Data", "Valor", "dias_para_liquidar"]].sort_values("dias_para_liquidar").head(20)
+            st.write("preview diferença dias:", debug_preview)
+
+        liq_bucket_df = build_liq_bucket_df(agenda_df, dt_ref)
 
         if liq_bucket_df.empty:
             st.info("Não foi possível montar a distribuição por faixas (estoque ou data-base ausentes).")
