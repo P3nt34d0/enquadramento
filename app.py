@@ -251,10 +251,11 @@ def build_liq_bucket_df(agenda_df: pd.DataFrame, dia_zero: dt.date | None) -> pd
     # diferença em dias corridos
     df["dias_para_liquidar"] = df["Data"].apply(lambda d: (d - dia_zero).days)
 
-    # só olhamos fluxos futuros ou no D0
-    df = df[df["dias_para_liquidar"] >= 0].copy()
-    if df.empty:
-        return pd.DataFrame(columns=["Faixa", "ValorTotal"])
+    # soma dos vencidos (dias < 0)
+    vencidos_val = df.loc[df["dias_para_liquidar"] < 0, "Valor"].sum()
+
+    # somente D0 e futuro para os demais buckets
+    df_pos = df.loc[df["dias_para_liquidar"] >= 0].copy()
 
     # buckets fixos de 15 em 15 dias até 181+
     buckets = [
@@ -273,8 +274,8 @@ def build_liq_bucket_df(agenda_df: pd.DataFrame, dia_zero: dt.date | None) -> pd
         (181, None),  # 181+
     ]
 
-    faixas = []
-    valores = []
+    faixas = ["Vencidos"]
+    valores = [float(vencidos_val)]
 
     for (lo, hi) in buckets:
         if hi is None:
@@ -810,9 +811,6 @@ agenda_df, estoque_raw_df, zip_base_date, csv_inner_name = _unpack_estoque(res_z
 if agenda_df is None or agenda_df.empty:
     st.info("Envie o **.zip** do estoque.")
 else:
-    st.caption(f"✅ Estoque carregado: {len(agenda_df):,} datas na agenda.")
-    if zip_base_date:
-        st.caption(f"🗓️ Data-base ZIP: {zip_base_date}")
     if not estoque_raw_df.empty:
         st.caption(f"📄 Linhas (nível título): {len(estoque_raw_df):,}")
 
