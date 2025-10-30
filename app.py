@@ -1003,77 +1003,82 @@ if st.button("Rodar projeção", type="primary"):
     st.markdown("### Indicadores do Estoque")
 
     def _normalize_br_number(s: pd.Series) -> pd.Series:
-        # converte "1.234.567,89" -> 1234567.89, lida com parênteses negativos
         s = s.astype(str).str.strip()
         s = s.str.replace(r"^\((.*)\)$", r"-\1", regex=True)
         s = s.str.replace(r"\s+", "", regex=True)
-        # se tem vírgula e ponto -> remove pontos de milhar, troca vírgula por ponto
         mask_both = s.str.contains(",", na=False) & s.str.contains(r"\.", na=False)
         s = s.where(~mask_both, s.str.replace(".", "", regex=False).str.replace(",", ".", regex=False))
-        # se só vírgula -> troca por ponto
         mask_comma = s.str.contains(",", na=False) & ~s.str.contains(r"\.", na=False)
         s = s.where(~mask_comma, s.str.replace(",", ".", regex=False))
         return pd.to_numeric(s, errors="coerce")
-    
-    if 'estoque_raw_df' in locals() and isinstance(estoque_raw_df, pd.DataFrame) and not estoque_raw_df.empty:
-        df = estoque_raw_df.copy()
-        df.columns = [c.strip().upper() for c in df.columns]
 
-        # Descobrir colunas
-        val_col = None
-        for c in ("VALOR_PRESENTE", "VALOR_NOMINAL", "VALOR_AQUISICAO", "VALOR"):
-            if c in df.columns:
-                val_col = c
-                break
+    with st.spinner("⏳ Calculando Indicadores do Estoque..."):
+        prazo_medio = None
+        taxa_media = None
 
-        prazo_col = None
-        # Prioriza PRAZO_ATUAL; se não existir, tenta PRAZO
-        if "PRAZO_ATUAL" in df.columns:
-            prazo_col = "PRAZO_ATUAL"
-        elif "PRAZO" in df.columns:
-            prazo_col = "PRAZO"
+        # permite vir do session_state também
+        _raw = None
+        if 'estoque_raw_df' in locals() and isinstance(estoque_raw_df, pd.DataFrame):
+            _raw = estoque_raw_df
+        elif 'estoque_raw_df' in st.session_state and isinstance(st.session_state.estoque_raw_df, pd.DataFrame):
+            _raw = st.session_state.estoque_raw_df
 
-        taxa_col = "TX_RECEBIVEL" if "TX_RECEBIVEL" in df.columns else None
+        if isinstance(_raw, pd.DataFrame) and not _raw.empty:
+            df = _raw.copy()
+            df.columns = [c.strip().upper() for c in df.columns]
 
-        if not val_col:
-            st.warning("Não encontrei coluna de valor no estoque (ex.: VALOR_NOMINAL/VALOR_PRESENTE).")
+            # Valor: preferir VALOR_BASE (novo reader). Fallbacks mantidos.
+            val_col = None
+            for c in ("VALOR_BASE", "VALOR_PRESENTE", "VALOR_NOMINAL", "VALOR_AQUISICAO", "VALOR"):
+                if c in df.columns:
+                    val_col = c
+                    break
+
+            prazo_col = "PRAZO_ATUAL" if "PRAZO_ATUAL" in df.columns else ("PRAZO" if "PRAZO" in df.columns else None)
+            taxa_col = "TX_RECEBIVEL" if "TX_RECEBIVEL" in df.columns else None
+
+            if val_col is None:
+                st.info("Importe o ZIP do estoque para calcular os indicadores (coluna de valor não encontrada).")
+            else:
+                df[val_col] = _normalize_br_number(df[val_col])
+
+                # Prazo médio ponderado (ignora negativos se desejar)
+                if prazo_col:
+                    df[prazo_col] = _normalize_br_number(df[prazo_col])
+                    df_prazo = df[[val_col, prazo_col]].dropna()
+                    df_prazo = df_prazo[df_prazo[prazo_col] >= 0]  # remova esta linha se quiser incluir vencidos
+                    denom_prazo = df_prazo[val_col].sum()
+                    prazo_medio = ((df_prazo[val_col] * df_prazo[prazo_col]).sum() / denom_prazo) if denom_prazo > 0 else None
+
+                # Taxa média ponderada (auto detecta escala)
+                if taxa_col:
+                    df[taxa_col] = _normalize_br_number(df[taxa_col])
+                    df_taxa = df[[val_col, taxa_col]].dropna()
+                    denom_taxa = df_taxa[val_col].sum()
+                    if denom_taxa > 0:
+                        taxa_media_raw = (df_taxa[val_col] * df_taxa[taxa_col]).sum() / denom_taxa  # pode vir 0.18 ou 18.0
+                        # heurística: se média > 1.5, assume que já está em percent (ex.: 18.9) e converte p/ fração
+                        taxa_media = taxa_media_raw / 100.0 if (taxa_media_raw is not None and taxa_media_raw > 1.5) else taxa_media_raw
+                    else:
+                        taxa_media = None
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.metric(
+                        "Prazo médio ponderado (dias)",
+                        value=(f"{prazo_medio:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".") if prazo_medio is not None else "—"),
+                        help="SOMARPRODUTO(Valor do Título; Prazo do Título) / SOMA(Valor do Título)"
+                    )
+                with c2:
+                    st.metric(
+                        "Taxa média ponderada do estoque (%)",
+                        value=(f"{(taxa_media*100):,.2f}%".replace(",", "X").replace(".", ",").replace("X", ".") if taxa_media is not None else "—"),
+                        help="SOMARPRODUTO(Valor do Título; TX_RECEBIVEL) / SOMA(Valor do Título)"
+                    )
         else:
-            # Normalizações numéricas
-            df[val_col] = _normalize_br_number(df[val_col])
+            st.info("Estoque detalhado (nível título) não disponível para cálculo dos indicadores.")
 
-            if prazo_col:
-                df[prazo_col] = _normalize_br_number(df[prazo_col])
-                # opcional: ignorar prazos negativos (vencidos)
-                df_prazo = df[[val_col, prazo_col]].dropna()
-                df_prazo = df_prazo[df_prazo[prazo_col] >= 0]
-                denom_prazo = df_prazo[val_col].sum()
-                prazo_medio = (df_prazo[val_col] * df_prazo[prazo_col]).sum() / denom_prazo if denom_prazo > 0 else None
-            else:
-                prazo_medio = None
-
-            if taxa_col:
-                df[taxa_col] = _normalize_br_number(df[taxa_col])
-                df_taxa = df[[val_col, taxa_col]].dropna()
-                denom_taxa = df_taxa[val_col].sum()
-                taxa_media = (df_taxa[val_col] * df_taxa[taxa_col]).sum() / denom_taxa if denom_taxa > 0 else None
-            else:
-                taxa_media = None
-
-            c1, c2 = st.columns(2)
-            with c1:
-                st.metric(
-                    "Prazo médio ponderado (dias)",
-                    value=(f"{prazo_medio:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".") if prazo_medio is not None else "—"),
-                    help="SOMARPRODUTO(Valor do Título; Prazo do Título) / SOMA(Valor do Título)"
-                )
-            with c2:
-                st.metric(
-                    "Taxa média ponderada do estoque (%)",
-                    value=(f"{(taxa_media*100):,.2f}%".replace(",", "X").replace(".", ",").replace("X", ".") if taxa_media is not None else "—"),
-                    help="SOMARPRODUTO(Valor do Título; TX_RECEBIVEL) / SOMA(Valor do Título)"
-                )
-    else:
-        st.info("Estoque detalhado (nível título) não disponível para cálculo dos indicadores.")
+    st.success("✅ Indicadores calculados.")
     
 
     col_g1_estoque, col_g2_estoque = st.columns(2)
