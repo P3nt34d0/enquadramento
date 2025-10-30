@@ -1187,7 +1187,7 @@ if st.button("Rodar projeção", type="primary"):
             df_i.rename(columns=cols_up, inplace=True)
 
             # séries numéricas
-            v = pd.to_numeric(df_i.get("VALOR_BASE"), errors="coerce")
+            v = pd.to_numeric(df_i.get("VALOR_PRESENTE"), errors="coerce")
             p = pd.to_numeric(df_i.get("PRAZO_ATUAL"), errors="coerce")
             t = pd.to_numeric(df_i.get("TX_RECEBIVEL"), errors="coerce")
 
@@ -1229,7 +1229,7 @@ if st.button("Rodar projeção", type="primary"):
             ws_ind.write(row, 1, "—")
         row += 2
 
-        ws_ind.write(row, 0, "Obs.: As métricas usam VALOR_BASE, PRAZO_ATUAL e TX_RECEBIVEL do ZIP.", note_fmt)
+        ws_ind.write(row, 0, "Obs.: As métricas usam VALOR_PRESENTE, PRAZO_ATUAL e TX_RECEBIVEL do ZIP.", note_fmt)
 
         # layout
         ws_ind.set_column(0, 0, 42)  # Indicador
