@@ -307,7 +307,7 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
         usando schema_overrides dinâmico
     """
     if zip_file is None:
-        return pd.DataFrame(columns=["Data", "Valor"]), None
+        return pd.DataFrame(columns=["Data", "Valor"]), pd.DataFrame(), None
 
     # Abre o ZIP e pega o primeiro CSV
     zf = zipfile.ZipFile(zip_file)
@@ -378,31 +378,25 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
     # mapeia nomes normalizados -> nome original
     name_map = {_norm_col(c): c for c in head_tbl.columns}
 
-    wanted_date = ["DATA_VENCIMENTO_AJUSTADA", "DTA_VENCIMENTO", "DATA_VENCIMENTO"]
-    wanted_val  = ["VALOR_PRESENTE", "VALOR_NOMINAL", "VALOR_AQUISICAO", "VALOR"]
-    wanted_ref  = ["DATA_REFERENCIA", "DATA_FUNDO", "DT_REF"]
-
-    def _pick(candidates):
-        for logical in candidates:
-            logical_norm = _norm_col(logical)
+    def _pick(cands: list[str]) -> str | None:
+        for logical in cands:
+            ln = _norm_col(logical)
             for seen_norm, real in name_map.items():
-                # match exato ou prefixo
-                if seen_norm.startswith(logical_norm):
+                if seen_norm.startswith(ln):
                     return real
         return None
 
-    date_col = _pick(wanted_date)
+    # preferências de colunas
+    date_col = _pick(["DATA_VENCIMENTO_AJUSTADA","DTA_VENCIMENTO","DATA_VENCIMENTO"])
     if not date_col:
         tmp_path.unlink(missing_ok=True)
         st.error("Coluna de Data ('DATA_VENCIMENTO_AJUSTADA'/'DTA_VENCIMENTO'/'DATA_VENCIMENTO') não encontrada.")
         return pd.DataFrame(columns=["Data", "Valor"]), pd.DataFrame(), None
 
-    val_col = _pick(wanted_val)
-    if not val_col:
-        # fallback: última coluna se não achou valor típico
-        val_col = head_tbl.columns[-1]
-
-    ref_col = _pick(wanted_ref)  # pode ser None
+    val_col = _pick(["VALOR_PRESENTE","VALOR_NOMINAL","VALOR_AQUISICAO","VALOR"])
+    ref_col  = _pick(["DATA_REFERENCIA","DATA_FUNDO","DT_REF"])
+    prazo_c  = _pick(["PRAZO_ATUAL","PRAZO"])
+    taxa_c   = _pick(["TX_RECEBIVEL"])
 
     # Agora que conhecemos TODAS as colunas, criamos schema_overrides
     # => força TODAS como Utf8 (texto)
@@ -494,27 +488,18 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
         .sort("Data")
     )
 
-    tbl = lf_main.collect(streaming=True)
-    agenda_df = tbl.to_pandas()
+    agenda_df = lf_main.collect(streaming=True).to_pandas()
     agenda_df["Data"] = pd.to_datetime(agenda_df["Data"]).dt.date
-
-    st.caption(
-        "✅ Estoque importado com sucesso"
-    )
-    st.caption(
-        "📊 Soma total do estoque: R$ "
-        + f"{agenda_df['Valor'].sum():,.2f}"
-          .replace(",", "X").replace(".", ",").replace("X", ".")
-    )
 
     # 3) ESTOQUE INTEIRO:
 
-    val_c = next((name_map[k] for k in name_map if "VALOR_PRESENTE" in k), None)
-    prazo_c = next((name_map[k] for k in name_map if "PRAZO_ATUAL" in k), None)
-    taxa_c = next((name_map[k] for k in name_map if "TX_RECEBIVEL" in k), None)
-    cols_to_read = [c for c in [val_c, prazo_c, taxa_c] if c]
+    exprs_raw = [
+        _pl_normalize_money(pl.col(val_col)).alias("VALOR_PRESENTE"),
+        (pl.col(prazo_c).cast(pl.Int64) if prazo_c else pl.lit(None)).alias("PRAZO_ATUAL"),
+        (_pl_normalize_money(pl.col(taxa_c)) if taxa_c else pl.lit(None)).alias("TX_RECEBIVEL"),
+    ]
 
-    lf = (
+    lf_raw = (
         pl.scan_csv(
         tmp_path,
         has_header=True,
@@ -527,14 +512,9 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
         infer_schema_length=0,
         schema_overrides=schema_overrides,
         )
-        .select([pl.col(c).cast(pl.Utf8) for c in cols_to_read])
+        .select(exprs_raw)
     )
 
-    lf_raw = lf.select({
-        "VALOR_PRESENTE": _pl_normalize_money(pl.col(val_c)).alias("VALOR_PRESENTE"),
-        "PRAZO_ATUAL": pl.col(prazo_c).cast(pl.Int64).alias("PRAZO_ATUAL") if prazo_c else pl.lit(None).alias("PRAZO_ATUAL"),
-        "TX_RECEBIVEL": _pl_normalize_money(pl.col(taxa_c)).alias("TX_RECEBIVEL") if taxa_c else pl.lit(None).alias("TX_RECEBIVEL"),
-    })
     estoque_raw_df = lf_raw.collect(streaming=True).to_pandas()
 
     # 4) PEGAR A DATA BASE DO ZIP (DATA_REFERENCIA / DATA_FUNDO...):
@@ -571,6 +551,17 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
             tmp_path.unlink(missing_ok=True)
         except Exception:
             pass
+
+    st.caption(
+        "✅ Estoque importado com sucesso"
+    )
+    st.caption(
+        "📊 Soma total do estoque: R$ "
+        + f"{agenda_df['Valor'].sum():,.2f}"
+          .replace(",", "X").replace(".", ",").replace("X", ".")
+    )
+    if zip_base_date:
+        st.caption(f"🗓️ Data-base detectada: {zip_base_date}")
 
     return agenda_df, estoque_raw_df, zip_base_date
 
