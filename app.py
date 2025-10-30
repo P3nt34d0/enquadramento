@@ -531,9 +531,9 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
     )
 
     lf_raw = lf.select({
-        "VALOR_NOMINAL": _pl_normalize_money(pl.col(val_col)).alias("VALOR_NOMINAL"),
-        "PRAZO": pl.col(prazo_col).cast(pl.Int64).alias("PRAZO") if prazo_col else pl.lit(None).alias("PRAZO"),
-        "TX_RECEBIVEL": _pl_normalize_money(pl.col(taxa_col)).alias("TX_RECEBIVEL") if taxa_col else pl.lit(None).alias("TX_RECEBIVEL"),
+        "VALOR_PRESENTE": _pl_normalize_money(pl.col(val_c)).alias("VALOR_PRESENTE"),
+        "PRAZO_ATUAL": pl.col(prazo_c).cast(pl.Int64).alias("PRAZO_ATUAL") if prazo_c else pl.lit(None).alias("PRAZO_ATUAL"),
+        "TX_RECEBIVEL": _pl_normalize_money(pl.col(taxa_c)).alias("TX_RECEBIVEL") if taxa_c else pl.lit(None).alias("TX_RECEBIVEL"),
     })
     estoque_raw_df = lf_raw.collect(streaming=True).to_pandas()
 
