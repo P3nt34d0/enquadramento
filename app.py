@@ -1165,6 +1165,7 @@ if st.button("Rodar projeção", type="primary"):
         days1_fmt= wb.add_format({"num_format": '0.0'})
         pct2_fmt = wb.add_format({"num_format": '0.00%'})
         num_fmt = wb.add_format({"num_format": "0"})
+        title_fmt = wb.add_format({"bold": True, "font_size": 14})
 
         # cabeçalho
         ws_ind.write("A1", "Indicador", h_fmt)
@@ -1228,22 +1229,21 @@ if st.button("Rodar projeção", type="primary"):
             ws_ind.write_number(row, 1, float(taxa_media), pct2_fmt)
         else:
             ws_ind.write(row, 1, "—")
-        row += 2
+        row += 3
+
+        ws_ind.write(row, 0, "Liquidações Futuras (em estoque) por Faixa de Prazo", title_fmt); row += 2
+        ws_ind.insert_image(row, 0, "faixas.png", {"image_data": img_faixa})
 
         # layout
         ws_ind.set_column(0, 0, 42)  # Indicador
         ws_ind.set_column(1, 1, 28)  # Valor
-        ws_ind.freeze_panes(1, 0)
 
         ws = wb.add_worksheet("Graficos")
-        title_fmt = wb.add_format({"bold": True, "font_size": 14})
 
         ws.write("A1",  "DC/PL ao longo do tempo (diário)", title_fmt)
         ws.insert_image("A3",  "dcpl.png", {"image_data": img_dcpl, "x_scale": 1.0, "y_scale": 1.0})
         ws.write("A27", "PL, DC e Soberano (diário)",        title_fmt)
         ws.insert_image("A29", "pldc.png", {"image_data": img_pldc, "x_scale": 1.0, "y_scale": 1.0})
-        ws.write("A53", "Liquidações Futuras (em estoque) por Faixa de Prazo", title_fmt)
-        ws.insert_image("A55", "faixas.png", {"image_data": img_faixa})
 
         # ajustes na aba Projecao
         ws_proj = writer.sheets["Projecao"]
