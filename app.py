@@ -1011,28 +1011,79 @@ if st.button("Rodar projeção", type="primary"):
     st.dataframe(out_bd, use_container_width=True)
 
     st.markdown("### Indicadores do Estoque")
-    if not estoque_raw_df.empty:
+
+    def _normalize_br_number(s: pd.Series) -> pd.Series:
+        # converte "1.234.567,89" -> 1234567.89, lida com parênteses negativos
+        s = s.astype(str).str.strip()
+        s = s.str.replace(r"^\((.*)\)$", r"-\1", regex=True)
+        s = s.str.replace(r"\s+", "", regex=True)
+        # se tem vírgula e ponto -> remove pontos de milhar, troca vírgula por ponto
+        mask_both = s.str.contains(",", na=False) & s.str.contains(r"\.", na=False)
+        s = s.where(~mask_both, s.str.replace(".", "", regex=False).str.replace(",", ".", regex=False))
+        # se só vírgula -> troca por ponto
+        mask_comma = s.str.contains(",", na=False) & ~s.str.contains(r"\.", na=False)
+        s = s.where(~mask_comma, s.str.replace(",", ".", regex=False))
+        return pd.to_numeric(s, errors="coerce")
+    
+    if 'estoque_raw_df' in locals() and isinstance(estoque_raw_df, pd.DataFrame) and not estoque_raw_df.empty:
         df = estoque_raw_df.copy()
         df.columns = [c.strip().upper() for c in df.columns]
 
-        if all(x in df.columns for x in ["VALOR_PRESENTE", "PRAZO_ATUAL", "TX_RECEBIVEL"]):
-            df["VALOR_PRESENTE"] = pd.to_numeric(df["VALOR_PRESENTE"], errors="coerce")
-            df["PRAZO_ATUAL"] = pd.to_numeric(df["PRAZO_ATUAL"], errors="coerce")
-            df["TX_RECEBIVEL"] = pd.to_numeric(df["TX_RECEBIVEL"], errors="coerce")
+        # Descobrir colunas
+        val_col = None
+        for c in ("VALOR_PRESENTE", "VALOR_NOMINAL", "VALOR_AQUISICAO", "VALOR"):
+            if c in df.columns:
+                val_col = c
+                break
 
-            total_val = df["VALOR_PRESENTE"].sum()
-            prazo_medio = (df["VALOR_PRESENTE"] * df["PRAZO_ATUAL"]).sum() / total_val
-            taxa_media = (df["VALOR_PRESENTE"] * df["TX_RECEBIVEL"]).sum() / total_val
+        prazo_col = None
+        # Prioriza PRAZO_ATUAL; se não existir, tenta PRAZO
+        if "PRAZO_ATUAL" in df.columns:
+            prazo_col = "PRAZO_ATUAL"
+        elif "PRAZO" in df.columns:
+            prazo_col = "PRAZO"
+
+        taxa_col = "TX_RECEBIVEL" if "TX_RECEBIVEL" in df.columns else None
+
+        if not val_col:
+            st.warning("Não encontrei coluna de valor no estoque (ex.: VALOR_NOMINAL/VALOR_PRESENTE).")
+        else:
+            # Normalizações numéricas
+            df[val_col] = _normalize_br_number(df[val_col])
+
+            if prazo_col:
+                df[prazo_col] = _normalize_br_number(df[prazo_col])
+                # opcional: ignorar prazos negativos (vencidos)
+                df_prazo = df[[val_col, prazo_col]].dropna()
+                df_prazo = df_prazo[df_prazo[prazo_col] >= 0]
+                denom_prazo = df_prazo[val_col].sum()
+                prazo_medio = (df_prazo[val_col] * df_prazo[prazo_col]).sum() / denom_prazo if denom_prazo > 0 else None
+            else:
+                prazo_medio = None
+
+            if taxa_col:
+                df[taxa_col] = _normalize_br_number(df[taxa_col])
+                df_taxa = df[[val_col, taxa_col]].dropna()
+                denom_taxa = df_taxa[val_col].sum()
+                taxa_media = (df_taxa[val_col] * df_taxa[taxa_col]).sum() / denom_taxa if denom_taxa > 0 else None
+            else:
+                taxa_media = None
 
             c1, c2 = st.columns(2)
             with c1:
-                st.metric("Prazo médio (dias úteis)", f"{prazo_medio:,.1f} dias")
+                st.metric(
+                    "Prazo médio ponderado (dias)",
+                    value=(f"{prazo_medio:,.1f}".replace(",", "X").replace(".", ",").replace("X", ".") if prazo_medio is not None else "—"),
+                    help="SOMARPRODUTO(Valor do Título; Prazo do Título) / SOMA(Valor do Título)"
+                )
             with c2:
-                st.metric("Taxa média (%)", f"{taxa_media*100:,.2f}%")
-        else:
-            st.warning("Colunas VALOR_PRESENTE, PRAZO_ATUAL ou TX_RECEBIVEL não encontradas no estoque.")
+                st.metric(
+                    "Taxa média ponderada do estoque (%)",
+                    value=(f"{(taxa_media*100):,.2f}%".replace(",", "X").replace(".", ",").replace("X", ".") if taxa_media is not None else "—"),
+                    help="SOMARPRODUTO(Valor do Título; TX_RECEBIVEL) / SOMA(Valor do Título)"
+                )
     else:
-        st.info("O estoque detalhado ainda não foi carregado.")
+        st.info("Estoque detalhado (nível título) não disponível para cálculo dos indicadores.")
 
     # ===== Exportar XLSX com gráficos embutidos =====
     output = BytesIO()
