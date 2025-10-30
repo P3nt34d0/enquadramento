@@ -15,6 +15,7 @@ import matplotlib.ticker as mtick
 import hashlib
 import tempfile
 from pathlib import Path
+from functools import lru_cache
 
 @st.cache_data(show_spinner=False)
 def _file_hash(file_bytes: bytes) -> str:
@@ -182,7 +183,9 @@ def distribute_acq_by_ranges(d_acq: dt.date, aq_diaria: float, faixas: list[tupl
         if max_d is None or (min_d >= 181):
             # bucket final: tudo em D+181 (um dia)
             target = next_business_day_calendar(d_acq + dt.timedelta(days=181))
-            add_fn(target, aq_diaria * pct)
+            du = business_days_between_calendar(d_acq, target)
+            valor_corrigido = (aq_diaria * pct) * ((1.0 + PL_DAILY_GROWTH) ** max(0, du))
+            add_fn(target, valor_corrigido)
         else:
             ndays = int(max_d - min_d + 1)
             if ndays <= 0:
@@ -191,7 +194,9 @@ def distribute_acq_by_ranges(d_acq: dt.date, aq_diaria: float, faixas: list[tupl
             # distribui 1..N dentro da faixa
             for off in range(min_d, max_d + 1):
                 target = next_business_day_calendar(d_acq + dt.timedelta(days=off))
-                add_fn(target, per_day)
+                du = business_days_between_calendar(d_acq, target)  # (d_acq, target]
+                valor_corrigido = per_day * ((1.0 + PL_DAILY_GROWTH) ** max(0, du))
+                add_fn(target, valor_corrigido)
 
 # ======= FERIADOS (carrega uma vez no início do app) =======
 def load_holidays_from_xlsx(path: str = "./feriados_nacionais.xlsx") -> set[dt.date]:
@@ -211,6 +216,24 @@ def load_holidays_from_xlsx(path: str = "./feriados_nacionais.xlsx") -> set[dt.d
 HOLIDAYS = load_holidays_from_xlsx()
 
 # ======= Funções baseadas no calendário =======
+
+@lru_cache(maxsize=200_000)
+def business_days_between_calendar(d0: dt.date, d1: dt.date) -> int:
+    """
+    Quantos DIAS ÚTEIS existem de (d0, d1] — exclusivo em d0, inclusivo em d1.
+    Usa is_business_day_calendar(d: date) já existente (que considera feriados).
+    Se d1 <= d0, retorna 0.
+    """
+    if d1 <= d0:
+        return 0
+    c, d = 0, d0
+    one = dt.timedelta(days=1)
+    while d < d1:
+        d = d + one
+        if is_business_day_calendar(d):
+            c += 1
+    return c
+
 def is_business_day_calendar(d: dt.date) -> bool:
     """Retorna True se for dia útil (Seg–Sex e não feriado)"""
     return (d.weekday() < 5) and (d not in HOLIDAYS)
