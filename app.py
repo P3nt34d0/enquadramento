@@ -115,6 +115,8 @@ def pick_week_weights(nome_fundo: str) -> dict[int, float]:
 SOBERANO_ISINS = {"BRUTOPCTF005", "BRITSBCTF001"}
 PL_DAILY_GROWTH = 0.000547507101747335  # 0,0547507101747335% ao dia
 
+DC_DAILY_GROWTH = 0.000690631874227687
+
 def distribute_monthly_acq_by_weekday(mes_primeiro_dia: dt.date,
                                       valor_mensal: float,
                                       week_weights: dict[int, float]) -> dict[dt.date, float]:
@@ -715,6 +717,11 @@ def simulate(pl0, dc0, sob0, agenda, orc_df, lim, months, start_date):
     plv, dcv, sobv = float(pl0), float(dc0), float(sob0)
     rows = []
     for d in eixo:
+        # 1) rendimento do PL e do DC apenas em DIAS ÚTEIS do seu calendário
+        if is_business_day_calendar(d):
+            plv = plv * (1.0 + PL_DAILY_GROWTH)
+            dcv = dcv * (1.0 + DC_DAILY_GROWTH)
+        
         aq = acq_increase.get(d, 0.0)
         liq_e = liq_estoque.get(d, 0.0)
         liq_a = liq_aquis.get(d, 0.0)
@@ -727,10 +734,6 @@ def simulate(pl0, dc0, sob0, agenda, orc_df, lim, months, start_date):
 
         # DC
         dcv = max(0.0, dcv + aq - liq_total)
-
-        # PL (apenas dia útil)
-        if is_business_day_calendar(d):
-            plv = plv * (1.0 + PL_DAILY_GROWTH)
 
         ratio = (dcv / plv) if plv > 0 else np.nan
         desenq = (False if np.isnan(ratio) else (ratio < lim))
