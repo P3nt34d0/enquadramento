@@ -1235,6 +1235,7 @@ if st.button("Rodar projeção", type="primary"):
         ws_ind.set_column(0, 0, 42)  # Indicador
         ws_ind.set_column(1, 1, 28)  # Valor
         ws_ind.freeze_panes(1, 0)
+
         ws = wb.add_worksheet("Graficos")
         title_fmt = wb.add_format({"bold": True, "font_size": 14})
 
@@ -1245,6 +1246,7 @@ if st.button("Rodar projeção", type="primary"):
         ws.write("A53", "Liquidações Futuras (em estoque) por Faixa de Prazo", title_fmt)
         ws.insert_image("A55", "faixas.png", {"image_data": img_faixa})
 
+        # ajustes na aba Projecao
         ws_proj = writer.sheets["Projecao"]
         ws_proj.freeze_panes(1, 1)
         ws_proj.set_column(0, 0, 12)
@@ -1262,5 +1264,5 @@ if st.button("Rodar projeção", type="primary"):
         file_name=nome_arquivo_xlsx,
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="secondary",
-        help="Inclui abas de dados e as imagens dos gráficos"
+        help="Inclui abas de dados, indicadores e imagens dos gráficos"
     )
