@@ -508,7 +508,14 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
     )
 
     # 3) ESTOQUE INTEIRO:
-    estoque_raw_df = pl.read_csv(
+
+    val_c = next((name_map[k] for k in name_map if "VALOR_PRESENTE" in k), None)
+    prazo_c = next((name_map[k] for k in name_map if "PRAZO_ATUAL" in k), None)
+    taxa_c = next((name_map[k] for k in name_map if "TX_RECEBIVEL" in k), None)
+    cols_to_read = [c for c in [val_c, prazo_c, taxa_c] if c]
+
+    lf = (
+        pl.scan_csv(
         tmp_path,
         has_header=True,
         separator=sep,
@@ -519,7 +526,16 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
         low_memory=True,
         infer_schema_length=0,
         schema_overrides=schema_overrides,
-    ).to_pandas()
+        )
+        .select([pl.col(c).cast(pl.Utf8) for c in cols_to_read])
+    )
+
+    lf_raw = lf.select({
+        "VALOR_NOMINAL": _pl_normalize_money(pl.col(val_col)).alias("VALOR_NOMINAL"),
+        "PRAZO": pl.col(prazo_col).cast(pl.Int64).alias("PRAZO") if prazo_col else pl.lit(None).alias("PRAZO"),
+        "TX_RECEBIVEL": _pl_normalize_money(pl.col(taxa_col)).alias("TX_RECEBIVEL") if taxa_col else pl.lit(None).alias("TX_RECEBIVEL"),
+    })
+    estoque_raw_df = lf_raw.collect(streaming=True).to_pandas()
 
     # 4) PEGAR A DATA BASE DO ZIP (DATA_REFERENCIA / DATA_FUNDO...):
     zip_base_date = None
