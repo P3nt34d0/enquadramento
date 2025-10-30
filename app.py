@@ -785,7 +785,7 @@ def _fmt_carteira(v):
     else:             txt = f"R$ {v:,.0f}"
     return txt.replace(",", "X").replace(".", ",").replace("X", ".")
 
-c1, c2, c3, c4, c5 = st.columns(4)
+c1, c2, c3, c4 = st.columns(4)
 with c1: st.metric("Data Base (XML)", value=str(dt_ref or "—"))
 with c2: st.metric("PL", value=(f"R$ {_fmt_carteira(pl0)}" if pl0 else "—"))
 with c3: st.metric("DC (Estoque + Debêntures)", value=(f"R$ {_fmt_carteira(dc0)}" if dc0 else "—"))
