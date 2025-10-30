@@ -740,25 +740,74 @@ def simulate(pl0, dc0, sob0, agenda, orc_df, lim, months, start_date):
 # 1) Estoque (ZIP)
 # =========================
 st.subheader("1) Estoque (zip)")
-res, estoque_raw_df, zip_base_date = read_estoque_from_zip(estoque_zip)
 
-# compat: aceita retorno (df) ou (df, zip_base_date) ou (df, zip_base_date, csv_inner_name)
-if isinstance(res, tuple):
-    if len(res) == 3:
-        agenda_df, zip_base_date, csv_inner_name = res
-    elif len(res) == 2:
-        agenda_df, zip_base_date = res
-        csv_inner_name = None
-    else:
-        agenda_df, zip_base_date = res[0], None
-        csv_inner_name = None
-else:
-    agenda_df = res
-    zip_base_date = None
-    csv_inner_name = None
+# sentinelas (evita NameError antes do upload)
+agenda_df = pd.DataFrame(columns=["Data", "Valor"])
+estoque_raw_df = pd.DataFrame()
+zip_base_date = None
+csv_inner_name = None  # se existir em versões antigas
 
+# chama a função SEM desempacotar
+res_zip = read_estoque_from_zip(estoque_zip)
+
+def _unpack_estoque(res):
+    """
+    Normaliza retornos antigos/novos de read_estoque_from_zip:
+      - (agenda_df, estoque_raw_df, zip_base_date)
+      - (agenda_df, zip_base_date)
+      - (agenda_df,)
+      - agenda_df
+      - (agenda_df, zip_base_date, csv_inner_name)  # compat
+    Retorna: agenda_df, estoque_raw_df, zip_base_date, csv_inner_name
+    """
+    _agenda = pd.DataFrame(columns=["Data", "Valor"])
+    _raw = pd.DataFrame()
+    _base = None
+    _inner = None
+
+    if isinstance(res, tuple):
+        # tenta mapear por tipos/conteúdo
+        if len(res) == 3:
+            # pode ser (agenda, raw, base) OU (agenda, base, inner)
+            a, b, c = res
+            if isinstance(a, pd.DataFrame) and isinstance(b, pd.DataFrame):
+                _agenda, _raw, _base = a, b, c
+            elif isinstance(a, pd.DataFrame) and (isinstance(b, (dt.date, type(None))) or b is None):
+                _agenda, _base, _inner = a, b, c  # compat antigo
+            else:
+                # fallback seguro
+                _agenda = a if isinstance(a, pd.DataFrame) else _agenda
+        elif len(res) == 2:
+            a, b = res
+            if isinstance(a, pd.DataFrame) and isinstance(b, pd.DataFrame):
+                _agenda, _raw = a, b
+            elif isinstance(a, pd.DataFrame) and (isinstance(b, (dt.date, type(None))) or b is None):
+                _agenda, _base = a, b
+            else:
+                _agenda = a if isinstance(a, pd.DataFrame) else _agenda
+        elif len(res) == 1:
+            a = res[0]
+            if isinstance(a, pd.DataFrame):
+                _agenda = a
+        else:
+            # tupla vazia/inválida
+            pass
+    elif isinstance(res, pd.DataFrame):
+        _agenda = res
+
+    return _agenda, _raw, _base, _inner
+
+agenda_df, estoque_raw_df, zip_base_date, csv_inner_name = _unpack_estoque(res_zip)
+
+# UI
 if agenda_df is None or agenda_df.empty:
     st.info("Envie o **.zip** do estoque.")
+else:
+    st.caption(f"✅ Estoque carregado: {len(agenda_df):,} datas na agenda.")
+    if zip_base_date:
+        st.caption(f"🗓️ Data-base ZIP: {zip_base_date}")
+    if not estoque_raw_df.empty:
+        st.caption(f"📄 Linhas (nível título): {len(estoque_raw_df):,}")
 
 # =========================
 # 2) Carteira (XML v4)
@@ -1025,7 +1074,7 @@ if st.button("Rodar projeção", type="primary"):
     col_g1_estoque, col_g2_estoque = st.columns(2)
     # ----- 1) Gráfico de barras: liquidação prevista por faixa de prazo -----
     with col_g1_estoque:
-        st.markdown("**Distribuição de liquidações por faixa de prazo de títulos em estoque (dias corridos)**")
+        st.markdown("**Distribuição de liquidações por faixa de prazo de títulos (dias corridos)**")
 
         liq_bucket_df = build_liq_bucket_df(agenda_df, dt_ref)
 
