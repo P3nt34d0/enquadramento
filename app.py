@@ -1,5 +1,4 @@
 # app.py
-import io
 import zipfile
 import xml.etree.ElementTree as ET
 import datetime as dt
@@ -310,15 +309,12 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
     if zip_file is None:
         return pd.DataFrame(columns=["Data", "Valor"]), None
 
-    import tempfile
-    from pathlib import Path
-
     # Abre o ZIP e pega o primeiro CSV
     zf = zipfile.ZipFile(zip_file)
     csv_names = [n for n in zf.namelist() if n.lower().endswith(".csv")]
     if not csv_names:
         st.error("ZIP não contém CSV.")
-        return pd.DataFrame(columns=["Data", "Valor"]), None
+        return pd.DataFrame(columns=["Data", "Valor"]), pd.DataFrame(), None
 
     inner = csv_names[0]
 
@@ -373,11 +369,11 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
     except Exception as e:
         tmp_path.unlink(missing_ok=True)
         st.error(f"Falha lendo cabeçalho CSV do ZIP com Polars: {e}")
-        return pd.DataFrame(columns=["Data", "Valor"]), None
+        return pd.DataFrame(columns=["Data", "Valor"]), pd.DataFrame(), None
 
     if head_tbl.height == 0 or len(head_tbl.columns) == 0:
         tmp_path.unlink(missing_ok=True)
-        return pd.DataFrame(columns=["Data", "Valor"]), None
+        return pd.DataFrame(columns=["Data", "Valor"]), pd.DataFrame(), None
 
     # mapeia nomes normalizados -> nome original
     name_map = {_norm_col(c): c for c in head_tbl.columns}
@@ -399,7 +395,7 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
     if not date_col:
         tmp_path.unlink(missing_ok=True)
         st.error("Coluna de Data ('DATA_VENCIMENTO_AJUSTADA'/'DTA_VENCIMENTO'/'DATA_VENCIMENTO') não encontrada.")
-        return pd.DataFrame(columns=["Data", "Valor"]), None
+        return pd.DataFrame(columns=["Data", "Valor"]), pd.DataFrame(), None
 
     val_col = _pick(wanted_val)
     if not val_col:
@@ -511,7 +507,21 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
           .replace(",", "X").replace(".", ",").replace("X", ".")
     )
 
-    # 3) PEGAR A DATA BASE DO ZIP (DATA_REFERENCIA / DATA_FUNDO...):
+    # 3) ESTOQUE INTEIRO:
+    estoque_raw_df = pl.read_csv(
+        tmp_path,
+        has_header=True,
+        separator=sep,
+        try_parse_dates=False,
+        encoding="utf8-lossy",
+        ignore_errors=True,
+        truncate_ragged_lines=True,
+        low_memory=True,
+        infer_schema_length=0,
+        schema_overrides=schema_overrides,
+    ).to_pandas()
+
+    # 4) PEGAR A DATA BASE DO ZIP (DATA_REFERENCIA / DATA_FUNDO...):
     zip_base_date = None
     try:
         lf_ref = (
@@ -546,7 +556,7 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
         except Exception:
             pass
 
-    return agenda_df, zip_base_date
+    return agenda_df, estoque_raw_df, zip_base_date
 
 
 # =========================
@@ -730,7 +740,7 @@ def simulate(pl0, dc0, sob0, agenda, orc_df, lim, months, start_date):
 # 1) Estoque (ZIP)
 # =========================
 st.subheader("1) Estoque (zip)")
-res, zip_base_date = read_estoque_from_zip(estoque_zip)
+res, estoque_raw_df, zip_base_date = read_estoque_from_zip(estoque_zip)
 
 # compat: aceita retorno (df) ou (df, zip_base_date) ou (df, zip_base_date, csv_inner_name)
 if isinstance(res, tuple):
@@ -916,7 +926,7 @@ if st.button("Rodar projeção", type="primary"):
 
     # ----- 3) Gráfico de barras: liquidação prevista por faixa de prazo -----
     with col_g3:
-        st.markdown("**Distribuição de Liquidações por Faixa de Prazo de títulos em estoque (dias corridos)**")
+        st.markdown("**Distribuição de liquidações por faixa de prazo de títulos em estoque (dias corridos)**")
 
         liq_bucket_df = build_liq_bucket_df(agenda_df, dt_ref)
 
@@ -992,13 +1002,37 @@ if st.button("Rodar projeção", type="primary"):
     st.write("- " + "\n- ".join(bullets))
 
     # ===== Tabela =====
-    st.markdown("### Tabela da projeção (dias úteis)")
+    st.markdown("### Tabela de projeção (dias úteis)")
     cols_fmt = ["PL", "DC", "Soberano", "Aquisicao_diaria", "Liq_Estoque", "Liq_Aquisicoes", "Liq_Total", "Caixa_Necessario"]
     for c in cols_fmt:
         if c in out_bd.columns:
             out_bd[c] = out_bd[c].map(lambda x: f"{x:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
     out_bd["DC/PL"] = out_bd["DC/PL"].map(lambda x: f"{x:.2%}".replace(".", ","))
     st.dataframe(out_bd, use_container_width=True)
+
+    st.markdown("### Indicadores do Estoque")
+    if not estoque_raw_df.empty:
+        df = estoque_raw_df.copy()
+        df.columns = [c.strip().upper() for c in df.columns]
+
+        if all(x in df.columns for x in ["VALOR_PRESENTE", "PRAZO_ATUAL", "TX_RECEBIVEL"]):
+            df["VALOR_PRESENTE"] = pd.to_numeric(df["VALOR_PRESENTE"], errors="coerce")
+            df["PRAZO_ATUAL"] = pd.to_numeric(df["PRAZO_ATUAL"], errors="coerce")
+            df["TX_RECEBIVEL"] = pd.to_numeric(df["TX_RECEBIVEL"], errors="coerce")
+
+            total_val = df["VALOR_PRESENTE"].sum()
+            prazo_medio = (df["VALOR_PRESENTE"] * df["PRAZO_ATUAL"]).sum() / total_val
+            taxa_media = (df["VALOR_PRESENTE"] * df["TX_RECEBIVEL"]).sum() / total_val
+
+            c1, c2 = st.columns(2)
+            with c1:
+                st.metric("Prazo médio (dias úteis)", f"{prazo_medio:,.1f} dias")
+            with c2:
+                st.metric("Taxa média (%)", f"{taxa_media*100:,.2f}%")
+        else:
+            st.warning("Colunas VALOR_PRESENTE, PRAZO_ATUAL ou TX_RECEBIVEL não encontradas no estoque.")
+    else:
+        st.info("O estoque detalhado ainda não foi carregado.")
 
     # ===== Exportar XLSX com gráficos embutidos =====
     output = BytesIO()
