@@ -503,8 +503,7 @@ def read_estoque_from_zip(zip_file) -> tuple[pd.DataFrame, dt.date | None]:
     agenda_df["Data"] = pd.to_datetime(agenda_df["Data"]).dt.date
 
     st.caption(
-        "✅ Agenda carregada: "
-        f"{agenda_df.shape[0]:,} datas únicas; separador='{sep}'"
+        "✅ Estoque importado com sucesso"
     )
     st.caption(
         "📊 Soma total do estoque: R$ "
@@ -763,6 +762,8 @@ if not carteira:
 dt_ref = carteira["dtposicao"]
 pl0 = carteira["patliq"]
 dc0 = carteira["dc_total"]
+dc_estoque = carteira["dc_fidc"]
+dc_debenture = carteira["dc_debentures"]
 sob0 = carteira["soberano0"]
 dcpl_pct = (dc0 / pl0 * 100) if pl0 > 0 else None
 
@@ -784,12 +785,16 @@ def _fmt_carteira(v):
     else:             txt = f"R$ {v:,.0f}"
     return txt.replace(",", "X").replace(".", ",").replace("X", ".")
 
-c1, c2, c3, c4, c5 = st.columns(5)
+c1, c2, c3, c4, c5 = st.columns(4)
 with c1: st.metric("Data Base (XML)", value=str(dt_ref or "—"))
 with c2: st.metric("PL", value=(f"R$ {_fmt_carteira(pl0)}" if pl0 else "—"))
 with c3: st.metric("DC (Estoque + Debêntures)", value=(f"R$ {_fmt_carteira(dc0)}" if dc0 else "—"))
 with c4: st.metric("Soberano (Caixa)", value=(f"R$ {_fmt_carteira(sob0)}" if sob0 else "—"))
-with c5: st.metric("DC/PL (%)", value=(f"{dcpl_pct:,.2f}%" if dcpl_pct is not None else "—"))
+
+c5, c6, c7 = st.columns(3)
+with c5: st.metric("DC (Estoque)", value=(f"R$ {_fmt_carteira(dc_estoque)}" if dc_estoque else "—"))
+with c6: st.metric("DC (Debêntures)", value=(f"R$ {_fmt_carteira(dc_debenture)}" if dc_debenture else "—"))
+with c7: st.metric("DC/PL (%)", value=(f"{dcpl_pct:,.2f}%" if dcpl_pct is not None else "—"))
 
 # =========================
 # 3) Orçamento — aquisições
@@ -840,7 +845,7 @@ if st.button("Rodar projeção", type="primary"):
 
     # ----- G1: DC/PL -----
     with col_g1:
-        st.markdown("**DC/PL ao longo do tempo (DIAS ÚTEIS)**")
+        st.markdown("**DC/PL ao longo do tempo (dias úteis)**")
         fig, ax = plt.subplots(figsize=(9, 5), dpi=140)
 
         x = pd.to_datetime(out_bd["Data"])
@@ -874,7 +879,7 @@ if st.button("Rodar projeção", type="primary"):
 
     # ----- G2: PL / DC / Soberano -----
     with col_g2:
-        st.markdown("**PL, DC e Soberano (DIAS ÚTEIS)**")
+        st.markdown("**PL, DC e Soberano (dias úteis)**")
         fig2, ax2 = plt.subplots(figsize=(9, 5), dpi=140)
 
         x = pd.to_datetime(out_bd["Data"])
@@ -911,7 +916,7 @@ if st.button("Rodar projeção", type="primary"):
 
     # ----- 3) Gráfico de barras: liquidação prevista por faixa de prazo -----
     with col_g3:
-        st.markdown("**Distribuição de Liquidações por Faixa de Prazo (Em estoque)**")
+        st.markdown("**Distribuição de Liquidações por Faixa de Prazo de títulos em estoque (dias corridos)**")
 
         liq_bucket_df = build_liq_bucket_df(agenda_df, dt_ref)
 
@@ -987,7 +992,7 @@ if st.button("Rodar projeção", type="primary"):
     st.write("- " + "\n- ".join(bullets))
 
     # ===== Tabela =====
-    st.markdown("### Tabela da projeção (diária)")
+    st.markdown("### Tabela da projeção (dias úteis)")
     cols_fmt = ["PL", "DC", "Soberano", "Aquisicao_diaria", "Liq_Estoque", "Liq_Aquisicoes", "Liq_Total", "Caixa_Necessario"]
     for c in cols_fmt:
         if c in out_bd.columns:
