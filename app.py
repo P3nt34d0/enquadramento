@@ -1144,6 +1144,7 @@ if st.button("Rodar projeção", type="primary"):
     # ===== Exportar XLSX com gráficos embutidos =====
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        # ---- abas de dados ----
         out_bd.to_excel(writer, sheet_name="Projecao", index=False)
         if agenda_df is not None and not agenda_df.empty:
             agenda_df.to_excel(writer, sheet_name="Liquidacoes em Estoque", index=False)
@@ -1151,6 +1152,89 @@ if st.button("Rodar projeção", type="primary"):
             orc_df.to_excel(writer, sheet_name="Orcamento Informado", index=False)
 
         wb = writer.book
+
+        # ==============================
+        # NOVA ABA: Indicadores do Estoque
+        # ==============================
+        ws_ind = wb.add_worksheet("Indicadores do Estoque")
+
+        # formatos
+        h_fmt   = wb.add_format({"bold": True, "bg_color": "#F2F2F2", "border": 1})
+        k_fmt   = wb.add_format({"bold": True})
+        brl_fmt = wb.add_format({"num_format": r'_-"R$ "* #.##0,00_-;-"R$ "* -#.##0,00_-;_-"R$ "* "-"??_-'})
+        pct_fmt = wb.add_format({"num_format": "0,00%"})
+        num_fmt = wb.add_format({"num_format": "0"})
+        days_fmt= wb.add_format({"num_format": "0,0"})
+        note_fmt= wb.add_format({"font_color": "#666666", "italic": True})
+
+        # cabeçalho
+        ws_ind.write("A1", "Indicador", h_fmt)
+        ws_ind.write("B1", "Valor",     h_fmt)
+
+        row = 1
+
+        # valores default
+        total_linhas = 0
+        total_valor  = None
+        prazo_medio  = None
+        taxa_media   = None
+
+        if isinstance(estoque_raw_df, pd.DataFrame) and not estoque_raw_df.empty:
+            df_i = estoque_raw_df.copy()
+
+            # garante nomes esperados
+            cols_up = {c: c.upper() for c in df_i.columns}
+            df_i.rename(columns=cols_up, inplace=True)
+
+            # séries numéricas
+            v = pd.to_numeric(df_i.get("VALOR_BASE"), errors="coerce")
+            p = pd.to_numeric(df_i.get("PRAZO_ATUAL"), errors="coerce")
+            t = pd.to_numeric(df_i.get("TX_RECEBIVEL"), errors="coerce")
+
+            total_linhas = len(df_i)
+            total_valor  = v.sum(skipna=True)
+
+            if pd.notna(total_valor) and total_valor > 0:
+                # Prazos negativos podem ser descartados se desejar:
+                # mask_p = p >= 0
+                # prazo_medio = (v[mask_p] * p[mask_p].fillna(0)).sum() / v[mask_p].sum()
+                prazo_medio = (v * p.fillna(0)).sum() / total_valor if p.notna().any() else None
+                taxa_media  = (v * t.fillna(0)).sum() / total_valor if t.notna().any() else None
+
+        # linhas
+        ws_ind.write(row, 0, "Data-base ZIP", k_fmt)
+        ws_ind.write(row, 1, (zip_base_date.strftime("%Y-%m-%d") if zip_base_date else "—")); row += 1
+
+        ws_ind.write(row, 0, "Total de títulos (linhas)", k_fmt)
+        ws_ind.write_number(row, 1, total_linhas, num_fmt); row += 1
+
+        ws_ind.write(row, 0, "Soma do valor do estoque (R$)", k_fmt)
+        if total_valor is not None:
+            ws_ind.write_number(row, 1, float(total_valor), brl_fmt)
+        else:
+            ws_ind.write(row, 1, "—")
+        row += 1
+
+        ws_ind.write(row, 0, "Prazo médio ponderado (dias)", k_fmt)
+        if prazo_medio is not None and np.isfinite(prazo_medio):
+            ws_ind.write_number(row, 1, float(prazo_medio), days_fmt)
+        else:
+            ws_ind.write(row, 1, "—")
+        row += 1
+
+        ws_ind.write(row, 0, "Taxa média ponderada do estoque (%)", k_fmt)
+        if taxa_media is not None and np.isfinite(taxa_media):
+            ws_ind.write_number(row, 1, float(taxa_media), pct_fmt)  # taxa já em fração (ex.: 0,1782)
+        else:
+            ws_ind.write(row, 1, "—")
+        row += 2
+
+        ws_ind.write(row, 0, "Obs.: As métricas usam VALOR_BASE, PRAZO_ATUAL e TX_RECEBIVEL do ZIP.", note_fmt)
+
+        # layout
+        ws_ind.set_column(0, 0, 42)  # Indicador
+        ws_ind.set_column(1, 1, 28)  # Valor
+        ws_ind.freeze_panes(1, 0)
         ws = wb.add_worksheet("Graficos")
         title_fmt = wb.add_format({"bold": True, "font_size": 14})
 
