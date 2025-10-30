@@ -851,7 +851,7 @@ if st.button("Rodar projeção", type="primary"):
     img_pldc = BytesIO()
     img_faixa = BytesIO()
 
-    col_g1, col_g2, col_g3 = st.columns(3)
+    col_g1, col_g2 = st.columns(2)
 
     # ----- G1: DC/PL -----
     with col_g1:
@@ -923,70 +923,6 @@ if st.button("Rodar projeção", type="primary"):
         img_pldc.seek(0)
         st.pyplot(fig2, clear_figure=False)
         plt.close(fig2)
-
-    # ----- 3) Gráfico de barras: liquidação prevista por faixa de prazo -----
-    with col_g3:
-        st.markdown("**Distribuição de liquidações por faixa de prazo de títulos em estoque (dias corridos)**")
-
-        liq_bucket_df = build_liq_bucket_df(agenda_df, dt_ref)
-
-        if liq_bucket_df.empty:
-            st.info("Não foi possível montar a distribuição por faixas (estoque ou data-base ausentes).")
-        else:
-            # formatação BRL no eixo Y
-            def _fmt_brl(v, pos):
-                absv = abs(v)
-                if absv >= 1e9:
-                    txt = f"R$ {v/1e9:,.2f} bi"
-                elif absv >= 1e6:
-                    txt = f"R$ {v/1e6:,.2f} mi"
-                elif absv >= 1e3:
-                    txt = f"R$ {v/1e3:,.0f} mil"
-                else:
-                    txt = f"R$ {v:,.0f}"
-                # troca , . pro padrão brasileiro
-                return (
-                    txt.replace(",", "X")
-                    .replace(".", ",")
-                    .replace("X", ".")
-                )
-
-            fig3, ax3 = plt.subplots(figsize=(9,4.5), dpi=140)
-
-            x_pos = range(len(liq_bucket_df))
-            ax3.bar(x_pos, liq_bucket_df["ValorTotal"], width=0.6)
-
-            ax3.set_xticks(list(x_pos))
-            ax3.set_xticklabels(liq_bucket_df["Faixa"], rotation=90, ha="center", va="top")
-
-            ax3.tick_params(axis="x", which="major", labelsize=8)
-            ax3.tick_params(axis="y", which="major", labelsize=9)
-
-            ax3.yaxis.set_major_formatter(mtick.FuncFormatter(_fmt_brl))
-
-            ax3.set_xlabel("Faixa de Dias até a Liquidação")
-            ax3.set_ylabel("Valor a Liquidar (R$)")
-
-            ax3.grid(axis="y", alpha=0.25)
-
-            # coloca label em cima de cada barra, em R$ mi/bil etc.
-            for xpos, val in zip(x_pos, liq_bucket_df["ValorTotal"]):
-                if val and val != 0:
-                    label_txt = _fmt_brl(val, None)
-                    ax3.text(
-                        xpos,
-                        val,
-                        label_txt,
-                        ha="center",
-                        va="bottom",
-                        fontsize=8,
-                        rotation=0,
-                    )
-
-            fig3.savefig(img_faixa, format="png", dpi=200, bbox_inches="tight")
-            img_faixa.seek(0)
-            st.pyplot(fig3, clear_figure=True)
-            plt.close(fig3)
 
     # ===== Resultado =====
     st.markdown("### Resultado")
@@ -1084,6 +1020,72 @@ if st.button("Rodar projeção", type="primary"):
                 )
     else:
         st.info("Estoque detalhado (nível título) não disponível para cálculo dos indicadores.")
+    
+
+    col_g1_estoque = st.columns(1)
+    # ----- 1) Gráfico de barras: liquidação prevista por faixa de prazo -----
+    with col_g1_estoque:
+        st.markdown("**Distribuição de liquidações por faixa de prazo de títulos em estoque (dias corridos)**")
+
+        liq_bucket_df = build_liq_bucket_df(agenda_df, dt_ref)
+
+        if liq_bucket_df.empty:
+            st.info("Não foi possível montar a distribuição por faixas (estoque ou data-base ausentes).")
+        else:
+            # formatação BRL no eixo Y
+            def _fmt_brl(v, pos):
+                absv = abs(v)
+                if absv >= 1e9:
+                    txt = f"R$ {v/1e9:,.2f} bi"
+                elif absv >= 1e6:
+                    txt = f"R$ {v/1e6:,.2f} mi"
+                elif absv >= 1e3:
+                    txt = f"R$ {v/1e3:,.0f} mil"
+                else:
+                    txt = f"R$ {v:,.0f}"
+                # troca , . pro padrão brasileiro
+                return (
+                    txt.replace(",", "X")
+                    .replace(".", ",")
+                    .replace("X", ".")
+                )
+
+            fig3, ax3 = plt.subplots(figsize=(9,4.5), dpi=140)
+
+            x_pos = range(len(liq_bucket_df))
+            ax3.bar(x_pos, liq_bucket_df["ValorTotal"], width=0.6)
+
+            ax3.set_xticks(list(x_pos))
+            ax3.set_xticklabels(liq_bucket_df["Faixa"], rotation=90, ha="center", va="top")
+
+            ax3.tick_params(axis="x", which="major", labelsize=8)
+            ax3.tick_params(axis="y", which="major", labelsize=9)
+
+            ax3.yaxis.set_major_formatter(mtick.FuncFormatter(_fmt_brl))
+
+            ax3.set_xlabel("Faixa de Dias até a Liquidação")
+            ax3.set_ylabel("Valor a Liquidar (R$)")
+
+            ax3.grid(axis="y", alpha=0.25)
+
+            # coloca label em cima de cada barra, em R$ mi/bil etc.
+            for xpos, val in zip(x_pos, liq_bucket_df["ValorTotal"]):
+                if val and val != 0:
+                    label_txt = _fmt_brl(val, None)
+                    ax3.text(
+                        xpos,
+                        val,
+                        label_txt,
+                        ha="center",
+                        va="bottom",
+                        fontsize=8,
+                        rotation=0,
+                    )
+
+            fig3.savefig(img_faixa, format="png", dpi=200, bbox_inches="tight")
+            img_faixa.seek(0)
+            st.pyplot(fig3, clear_figure=True)
+            plt.close(fig3)
 
     # ===== Exportar XLSX com gráficos embutidos =====
     output = BytesIO()
