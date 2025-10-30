@@ -787,13 +787,13 @@ def _fmt_carteira(v):
 
 c1, c2, c3, c4 = st.columns(4)
 with c1: st.metric("Data Base (XML)", value=str(dt_ref or "—"))
-with c2: st.metric("PL", value=(f"R$ {_fmt_carteira(pl0)}" if pl0 else "—"))
-with c3: st.metric("DC (Estoque + Debêntures)", value=(f"R$ {_fmt_carteira(dc0)}" if dc0 else "—"))
-with c4: st.metric("Soberano (Caixa)", value=(f"R$ {_fmt_carteira(sob0)}" if sob0 else "—"))
+with c2: st.metric("PL", value=(f"{_fmt_carteira(pl0)}" if pl0 else "—"))
+with c3: st.metric("DC (Estoque + Debêntures)", value=(f"{_fmt_carteira(dc0)}" if dc0 else "—"))
+with c4: st.metric("Soberano (Caixa)", value=(f"{_fmt_carteira(sob0)}" if sob0 else "—"))
 
 c5, c6, c7 = st.columns(3)
-with c5: st.metric("DC (Estoque)", value=(f"R$ {_fmt_carteira(dc_estoque)}" if dc_estoque else "—"))
-with c6: st.metric("DC (Debêntures)", value=(f"R$ {_fmt_carteira(dc_debenture)}" if dc_debenture else "—"))
+with c5: st.metric("DC (Estoque)", value=(f"{_fmt_carteira(dc_estoque)}" if dc_estoque else "—"))
+with c6: st.metric("DC (Debêntures)", value=(f"{_fmt_carteira(dc_debenture)}" if dc_debenture else "—"))
 with c7: st.metric("DC/PL (%)", value=(f"{dcpl_pct:,.2f}%" if dcpl_pct is not None else "—"))
 
 # =========================
