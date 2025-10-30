@@ -1022,7 +1022,7 @@ if st.button("Rodar projeção", type="primary"):
         st.info("Estoque detalhado (nível título) não disponível para cálculo dos indicadores.")
     
 
-    col_g1_estoque = st.columns(1)
+    col_g1_estoque, col_g2_estoque = st.columns(1)
     # ----- 1) Gráfico de barras: liquidação prevista por faixa de prazo -----
     with col_g1_estoque:
         st.markdown("**Distribuição de liquidações por faixa de prazo de títulos em estoque (dias corridos)**")
