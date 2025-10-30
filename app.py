@@ -1158,14 +1158,13 @@ if st.button("Rodar projeção", type="primary"):
         # ==============================
         ws_ind = wb.add_worksheet("Indicadores do Estoque")
 
-        # formatos
-        h_fmt   = wb.add_format({"bold": True, "bg_color": "#F2F2F2", "border": 1})
-        k_fmt   = wb.add_format({"bold": True})
-        brl_fmt = wb.add_format({"num_format": r'_-"R$ "* #.##0,00_-;-"R$ "* -#.##0,00_-;_-"R$ "* "-"??_-'})
-        pct_fmt = wb.add_format({"num_format": "0,00%"})
+        # === formatos (use ponto nos formatos; o Excel aplica o separador do Windows) ===
+        h_fmt    = wb.add_format({"bold": True, "bg_color": "#F2F2F2", "border": 1})
+        k_fmt    = wb.add_format({"bold": True})
+        brl_fmt  = wb.add_format({"num_format": u'[$R$-pt-BR] #,##0.00;[Red]-[$R$-pt-BR] #,##0.00'})
+        days1_fmt= wb.add_format({"num_format": '0.0'})
+        pct2_fmt = wb.add_format({"num_format": '0.00%'})
         num_fmt = wb.add_format({"num_format": "0"})
-        days_fmt= wb.add_format({"num_format": "0,0"})
-        note_fmt= wb.add_format({"font_color": "#666666", "italic": True})
 
         # cabeçalho
         ws_ind.write("A1", "Indicador", h_fmt)
@@ -1210,26 +1209,26 @@ if st.button("Rodar projeção", type="primary"):
 
         ws_ind.write(row, 0, "Soma do valor do estoque (R$)", k_fmt)
         if total_valor is not None:
-            ws_ind.write_number(row, 1, float(total_valor), brl_fmt)
+            ws_ind.write_number(row, 1, float(round(total_valor, 2)), brl_fmt)
         else:
             ws_ind.write(row, 1, "—")
         row += 1
 
         ws_ind.write(row, 0, "Prazo médio ponderado (dias)", k_fmt)
         if prazo_medio is not None and np.isfinite(prazo_medio):
-            ws_ind.write_number(row, 1, float(prazo_medio), days_fmt)
+            ws_ind.write_number(row, 1, float(round(prazo_medio, 1)), days1_fmt)
         else:
             ws_ind.write(row, 1, "—")
         row += 1
 
         ws_ind.write(row, 0, "Taxa média ponderada do estoque (%)", k_fmt)
         if taxa_media is not None and np.isfinite(taxa_media):
-            ws_ind.write_number(row, 1, float(taxa_media), pct_fmt)  # taxa já em fração (ex.: 0,1782)
+            # taxa_media deve estar em FRAÇÃO (ex.: 0.188956 => 18,90%).
+            # Se no seu CSV ela vier como 18.8956, faça: taxa_media /= 100
+            ws_ind.write_number(row, 1, float(taxa_media), pct2_fmt)
         else:
             ws_ind.write(row, 1, "—")
         row += 2
-
-        ws_ind.write(row, 0, "Obs.: As métricas usam VALOR_PRESENTE, PRAZO_ATUAL e TX_RECEBIVEL do ZIP.", note_fmt)
 
         # layout
         ws_ind.set_column(0, 0, 42)  # Indicador
